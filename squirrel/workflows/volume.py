@@ -111,6 +111,15 @@ def crop_from_stack_workflow(
         from squirrel.library.io import write_h5_container
         write_h5_container(out_path, data)
         return
+    if ft_out == 'ome_zarr':
+        from squirrel.library.ome_zarr import create_ome_zarr, get_ome_zarr_handle, chunk_to_ome_zarr
+        create_ome_zarr(
+            filepath=out_path,
+            shape=data.shape
+        )
+        h = get_ome_zarr_handle(out_path, mode='a')
+        chunk_to_ome_zarr(data, [0, 0, 0], h, key='s0', populate_downsample_layers=True)
+        return
     raise ValueError(f'Invalid output type = {ft_out}')
 
 

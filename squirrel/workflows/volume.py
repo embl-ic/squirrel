@@ -79,6 +79,13 @@ def crop_from_stack_workflow(
     h, s = load_data_handle(stack_path, key=key, pattern=pattern)
 
     if not reslice_sample:
+        for ridx, r in enumerate(roi[3:]):
+            if roi[ridx + 3] == 0: 
+                roi[ridx + 3] = s[ridx] - roi[ridx + 3]
+
+        if verbose:
+            print(f'roi = {roi}')
+
         roi = np.s_[roi[0]: roi[0] + roi[3], roi[1]: roi[1] + roi[4], roi[2]: roi[2] + roi[5]]
         if isinstance(h, TiffStack):
             data = h[:][roi]

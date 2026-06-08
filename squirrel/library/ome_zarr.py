@@ -21,12 +21,15 @@ def create_ome_zarr(
         downsample_factors=(2, 2, 2),
         chunk_size=(1, 256, 256),
         dtype='uint8',
-        name=None
+        name=None,
+        verbose=False
 ):
 
-    print(chunk_size)
+    if verbose:
+        print(f'cunk_size = {chunk_size}')
     chunk_size = _normalize_chunk_size(chunk_size, len(downsample_factors) + 1)
-    print(chunk_size)
+    if verbose: 
+        print(f'chunk_size = {chunk_size}')
 
     from zarr import open as zarr_open
     from numcodecs import Blosc

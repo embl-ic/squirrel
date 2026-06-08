@@ -281,8 +281,8 @@ def crop_from_stack():
                              'Will be created if not existing')
     parser.add_argument('--roi', type=int, nargs=6, default=None,
                         metavar=('Z', 'Y', 'X', 'D', 'H', 'W'),
-                        help='Region of interest to crop, given in voxels; '
-                             'If "D", "H", or "W" is set to 0, the full extent along the respective axis will be used; '
+                        help='Region of interest to crop, given in voxels\n'
+                             'If "D", "H", or "W" is set to 0, the full extent along the respective axis will be used\n'
                              'default=None which will be interpreted as using the full stack')
     parser.add_argument('--key', type=str, default='data',
                         help='For h5 or ome.zarr input stacks this key is used to locate the dataset inside the stack '

@@ -115,7 +115,8 @@ def crop_from_stack_workflow(
         from squirrel.library.ome_zarr import create_ome_zarr, get_ome_zarr_handle, chunk_to_ome_zarr
         create_ome_zarr(
             filepath=out_path,
-            shape=data.shape
+            shape=data.shape,
+            dtype=data.dtype
         )
         h = get_ome_zarr_handle(out_path, mode='a')
         chunk_to_ome_zarr(data, [0, 0, 0], h, key='s0', populate_downsample_layers=True)

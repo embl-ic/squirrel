@@ -118,6 +118,7 @@ class ImageFilter:
 
         result_array = self._in_array.copy() if in_array is None else in_array
         for filter_name, filter_kwargs in filters:
+            # print(f'Applying filter {filter_name} with kwargs {filter_kwargs} ...')
             result_array = getattr(self, filter_name)(result_array, **filter_kwargs)
             if return_intermediates:
                 intermediates.append(result_array)

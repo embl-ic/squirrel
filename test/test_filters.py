@@ -65,6 +65,96 @@ class TestImageFilter(unittest.TestCase):
 
         np.testing.assert_equal(vsnr_ref, vsnr)
 
+    def test_same(self):
+        print(f'Testing "same" filter ...')
+        from squirrel.library.filters import ImageFilter
+        from skimage.data import camera
+        img = camera()
+
+        imf = ImageFilter(img)
+        same = imf.get_filtered([['same', dict()]])
+
+        np.testing.assert_equal(img, same)
+
+    def test_invert(self):
+        print(f'Testing "invert" filter ...')
+        from squirrel.library.filters import ImageFilter
+        from skimage.data import camera
+        img = camera()
+
+        imf = ImageFilter(img)
+        inverted = imf.get_filtered([['invert', dict()]])
+
+        np.testing.assert_equal(255 - img, inverted)
+
+    def test_filter_wrapper_clip(self):
+        print(f'Testing filter wrapper clipping ...')
+        from squirrel.library.filters import ImageFilter
+        from skimage.data import camera
+        img = camera()
+
+        imf = ImageFilter(img)
+        filtered = imf.get_filtered([['same', dict(clip=[100, 200])]])
+                                    
+        np.testing.assert_equal(filtered, np.clip(img, 100, 200))
+
+    def test_filter_wrapper_cast_dtype_float32(self):
+        print(f'Testing filter wrapper dtype casting to float32 ...')
+        from squirrel.library.filters import ImageFilter
+        from skimage.data import camera
+        img = camera()
+
+        imf = ImageFilter(img)
+        filtered = imf.get_filtered([['same', dict(cast_dtype=np.float32)]])
+
+        np.testing.assert_equal(filtered, img.astype(np.float32))
+
+    def test_filter_wrapper_cast_dtype_uint8(self):
+        print(f'Testing filter wrapper dtype casting to uint8 ...')
+
+        from squirrel.library.filters import ImageFilter
+        img = np.arange(256).reshape(16, 16)
+        imf = ImageFilter(img.astype(np.float64) + 100 * 100)
+        filtered = imf.get_filtered([['same', dict(cast_dtype=np.uint8)]])
+
+        np.testing.assert_equal(filtered, img)
+
+    def test_filter_wrapper_filter_mode(self):
+        print(f'Testing filter mode of filter wrapper ...')
+
+        from squirrel.library.filters import ImageFilter
+        from skimage.data import camera
+
+        img = camera()
+
+        imf = ImageFilter(img)
+        filtered1 = imf.get_filtered([['same', dict(filter_mode='add')]])
+        filtered2 = imf.get_filtered([['same', dict(filter_mode='subtract')]])
+
+        np.testing.assert_equal(filtered1, 2 * img.astype(np.float64))
+        np.testing.assert_equal(filtered2, np.zeros_like(img, dtype=np.float64))
+        self.assertEqual(filtered1.dtype, np.float32)
+        self.assertEqual(filtered2.dtype, np.float32)
+
+    def test_filter_wrapper_keep_zeros(self):
+        print(f'Testing keep_zeros option of filter wrapper ...')
+        from squirrel.library.filters import ImageFilter
+
+        img = np.zeros((16, 16), dtype=np.uint8)
+        img[8, 8] = 255
+
+        imf = ImageFilter(img)
+        filtered1 = imf.get_filtered([['gaussian', dict(keep_zeros=True, sigma=5)]])
+        filtered2 = imf.get_filtered([['gaussian', dict(keep_zeros=False, sigma=5)]])
+
+        # With keep_zeros=True, the zero pixels should remain zero
+        self.assertEqual(filtered1[7, 7], 0)
+        self.assertGreater(filtered1[8, 8], 0)  
+
+        # With keep_zeros=False, the zero pixels can be modified by the filter
+        self.assertGreater(filtered2[7, 7], 0)
+        self.assertEqual(filtered1[8, 8], filtered2[8, 8])  # The non-zero pixel should be the same in both cases
+
 
 class TestFilters(unittest.TestCase):
 

@@ -359,5 +359,37 @@ def apply_auto_pad():
     )
 
 
+def get_affine_transforms_substack():
+
+    # ----------------------------------------------------
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Extracts a substack of affine transforms from a stack of transformations.',
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument('transform_filepath', type=str,
+                        help='Json file containing the transformation')
+    parser.add_argument('out_filepath', type=str,
+                        help='Json file to which the result is saved')
+    parser.add_argument('--z_range', type=int, nargs=2, default=None,
+                        help='The z-range of the substack to extract; default=None (the entire stack)')
+    parser.add_argument('-v', '--verbose', action='store_true')
+
+    args = parser.parse_args()
+    transform_filepath = args.transform_filepath
+    out_filepath = args.out_filepath
+    z_range = args.z_range
+    verbose = args.verbose
+
+    from squirrel.workflows.transformation import get_affine_transforms_substack_workflow
+    get_affine_transforms_substack_workflow(
+        transform_filepath,
+        out_filepath,
+        z_range=z_range,
+        verbose=verbose
+    )
+
+
 if __name__ == '__main__':
     apply_stack_alignment()

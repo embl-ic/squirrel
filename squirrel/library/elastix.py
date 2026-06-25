@@ -1352,6 +1352,11 @@ class ElastixStack:
 
         return shapes[0]
 
+    def get_substack(self, sl:slice):
+        substack = ElastixStack()
+        substack.set_from_stack(self[sl])
+        return substack
+    
 
 def load_transform_stack_from_multiple_files(paths, sequence_stack=False):
 

@@ -692,6 +692,39 @@ def apply_multi_step_stack_alignment():
     )
 
 
+def get_elastix_transforms_substack():
+
+    # ----------------------------------------------------
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Extracts a substack of the elastix transforms for a stack alignment',
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument('transform_stack', type=str,
+                        help='Input filepath for the elastix transform stack (h5 file)')
+    parser.add_argument('out_dirpath', type=str,
+                        help='Output directory path for the result files')
+    parser.add_argument('--z_range', type=int, nargs=2, default=None,
+                        help='Use certain slices of the stack only; Defaults to the entire stack')
+    parser.add_argument('-v', '--verbose', action='store_true')
+
+    args = parser.parse_args()
+    transform_stack = args.transform_stack
+    out_dirpath = args.out_dirpath
+    z_range = args.z_range
+    verbose = args.verbose
+
+    from squirrel.workflows.elastix import get_elastix_transforms_substack_workflow
+
+    get_elastix_transforms_substack_workflow(
+        transform_stack,
+        out_dirpath,
+        z_range=z_range,
+        verbose=verbose
+    )
+
+
 # def stitch_parts():
 #
 #     # ----------------------------------------------------

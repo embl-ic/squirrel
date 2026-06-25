@@ -415,6 +415,7 @@ def elastix_stack_alignment_workflow(
         average_for_z_step=False,
         determine_bounds=False,
         parameter_map=None,
+        max_offset_distance=None,  # Only for translation transform, in pixels, to limit the search space for the translation
         quiet=False,
         overwrite=False,
         n_workers=os.cpu_count(),
@@ -522,6 +523,10 @@ def elastix_stack_alignment_workflow(
             transforms.append(result_matrix)
             if determine_bounds:
                 bounds.append(this_bounds)
+
+    if transform == 'translation' and max_offset_distance is not None:
+        # Limit the search space for the translation
+        transforms.large_offsets_to_zero(max_offset_distance)
 
     if z_step > 1:
         transforms.set_meta('z_step', z_step)
@@ -938,6 +943,24 @@ def make_elastix_default_parameter_file_workflow(
         print(f'out_filepath = {out_filepath}')
     WriteParameterFile(params, out_filepath)
 
+
+def get_elastix_transforms_substack_workflow(
+        transform_stack,
+        out_dirpath,
+        z_range=None,
+        verbose=False
+):
+
+    if not os.path.exists(out_dirpath):
+        from squirrel.library.elastix import ElastixStack
+        stack = ElastixStack(dirpath=transform_stack)
+        substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
+        substack.to_file(out_dirpath)
+        return
+
+    raise RuntimeError('The output already exists, choose a different output path or delete the existing one.')
+
+    
 
 if __name__ == '__main__':
     # stack_alignment_validation_workflow(

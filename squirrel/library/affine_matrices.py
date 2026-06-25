@@ -422,6 +422,34 @@ class AffineStack:
         translations = np.array(self.get_translations())
         self.set_translations(translations + np.array(values))
 
+    def get_substack(self, sl: slice):
+        substack = self.new_stack_with_same_meta(self[sl])
+        if self.exists_meta('bounds'):
+            bounds = self.get_meta('bounds')
+            substack.set_meta('bounds', bounds[sl])
+        if self.exists_meta('stack_shape'):
+            stack_shape = self.get_meta('stack_shape')
+            substack.set_meta('stack_shape', [sl.stop - sl.start, stack_shape[1], stack_shape[2]])
+        return substack
+    
+    def large_offsets_to_zero(self, max_offset_distance):
+        """
+        For translation transforms, set large offsets to zero to limit the search space for the translation.
+        This is useful when the translation is expected to be small and large offsets are likely due to noise or artifacts.
+        Note that this does not check or change the affine part of the transform.
+
+        :param max_offset_distance: Maximum allowed offset distance in pixels. Offsets larger than this will be set to zero.
+        """
+        assert self.get_ndim() == 2 or self.get_ndim() == 3, "This method only applies to 2D or 3D affine transforms."
+        assert not self.is_sequenced, "This method only applies to non-sequenced affine stacks."
+        translations = self.get_translations()
+        translations = np.array(translations)
+        print(f'translations = {translations}')
+        distances = np.linalg.norm(translations, axis=1)
+        translations[distances > max_offset_distance] = 0
+        print(f'translations = {translations}')
+        self.set_translations(translations)
+
 
 class AffineMatrix:
 
@@ -838,6 +866,20 @@ if __name__ == '__main__':
     # TODO: the stuff here should be implemented as unittests
 
     if True:
+        astack = AffineStack(
+            stack=[
+                [1, 0, 1, 0, 1, 1],
+                [1, 0, 2, 0, 1, 2],
+                [1, 0, 3, 0, 1, 3],
+            ],
+            is_sequenced=False
+        )
+
+        print(astack['Ms', :])
+        astack.large_offsets_to_zero(max_offset_distance=1.1)
+        print(astack['Ms', :])
+
+    if False:
         print('Testing the stack object -----------------')
         stk = AffineStack(
             stack=[[1.1, 0., 5, 0., 1.3, 2], [0.8, 0., -3, 0., 0.75, 1.5]],

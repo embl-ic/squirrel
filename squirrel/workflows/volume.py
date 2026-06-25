@@ -79,6 +79,13 @@ def crop_from_stack_workflow(
     h, s = load_data_handle(stack_path, key=key, pattern=pattern)
 
     if not reslice_sample:
+        for ridx, r in enumerate(roi[3:]):
+            if roi[ridx + 3] == 0: 
+                roi[ridx + 3] = s[ridx] - roi[ridx + 3]
+
+        if verbose:
+            print(f'roi = {roi}')
+
         roi = np.s_[roi[0]: roi[0] + roi[3], roi[1]: roi[1] + roi[4], roi[2]: roi[2] + roi[5]]
         if isinstance(h, TiffStack):
             data = h[:][roi]
@@ -103,6 +110,16 @@ def crop_from_stack_workflow(
     if ft_out == 'h5':
         from squirrel.library.io import write_h5_container
         write_h5_container(out_path, data)
+        return
+    if ft_out == 'ome_zarr':
+        from squirrel.library.ome_zarr import create_ome_zarr, get_ome_zarr_handle, chunk_to_ome_zarr
+        create_ome_zarr(
+            filepath=out_path,
+            shape=data.shape,
+            dtype=data.dtype
+        )
+        h = get_ome_zarr_handle(out_path, mode='a')
+        chunk_to_ome_zarr(data, [0, 0, 0], h, key='s0', populate_downsample_layers=True)
         return
     raise ValueError(f'Invalid output type = {ft_out}')
 
@@ -554,14 +571,39 @@ def filter_2d_workflow(
         write_stack(out_path, filtered_stack, key=out_key)
         return
 
-    assert get_filetype(out_path) == 'dir', 'Batched processing only implemented for tif stack output!'
+    # assert get_filetype(out_path) == 'dir', 'Batched processing only implemented for tif stack output!'
+    if get_filetype(out_path) == 'ome_zarr':
+        if verbose:
+            print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {stack_handle.dtype}')
+        from squirrel.library.ome_zarr import create_ome_zarr
+        create_ome_zarr(
+            filepath=out_path,
+            shape=stack_shape,
+            dtype=stack_handle.dtype
+        )
 
-    from squirrel.library.io import write_tif_stack
+    def _write_batch(batch, id_offset, out_path):
+        out_filetype = get_filetype(out_path)
+        if out_filetype == 'dir':
+            from squirrel.library.io import write_tif_stack
+            write_tif_stack(batch, out_path, id_offset=id_offset, slice_name='slice_{:05d}.tif')
+            return
+        if out_filetype == 'ome_zarr':
+            from squirrel.library.ome_zarr import get_ome_zarr_handle, chunk_to_ome_zarr
+            h = get_ome_zarr_handle(out_path, mode='a')
+            chunk_to_ome_zarr(batch, [id_offset, 0, 0], h, key='s0', populate_downsample_layers=True)
+            return
+        raise ValueError(f'Invalid output type = {out_filetype}')
+        
     for zidx in range(0, stack_shape[0], batch_size):
 
         imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
+        if verbose:
+            print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
         filtered_substack = imf.get_filtered_stack(filters, n_workers=n_workers)
-        write_tif_stack(filtered_substack, out_path, id_offset=zidx, slice_name='slice_{:05}.tif')
+        if verbose:
+            print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
+        _write_batch(filtered_substack, zidx, out_path)
 
 
 if __name__ == '__main__':

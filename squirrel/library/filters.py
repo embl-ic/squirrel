@@ -66,6 +66,8 @@ def filter_wrapper(func):
             raise ValueError(f'Invalid value for filter_mode: {filter_mode}; Valid values: ["apply", "add", "subtract"]')
         if clip is not None and len(clip) != 2:
             raise ValueError(f"clip must have exactly two values (low, high); instead got: {clip}")
+        
+        cast_dtype = np.dtype(cast_dtype) if cast_dtype is not None else None
 
         original = in_array
         result = func(in_array, *args, **kwargs)
@@ -78,7 +80,7 @@ def filter_wrapper(func):
         if clip is not None:
             result = np.clip(result, *clip)
 
-        if cast_dtype in ['uint8', 'uint16', 'uint32', 'uint64']:
+        if np.issubdtype(cast_dtype, np.unsignedinteger):
             result -= result.min()
             result = result / result.max() * np.iinfo(cast_dtype).max
             result = result.astype(cast_dtype)
@@ -118,6 +120,7 @@ class ImageFilter:
 
         result_array = self._in_array.copy() if in_array is None else in_array
         for filter_name, filter_kwargs in filters:
+            # print(f'Applying filter {filter_name} with kwargs {filter_kwargs} ...')
             result_array = getattr(self, filter_name)(result_array, **filter_kwargs)
             if return_intermediates:
                 intermediates.append(result_array)
@@ -311,7 +314,17 @@ class ImageFilter:
             sigma: tuple[float, float] = (10, 10)
     ) -> np.ndarray:
         return fft_highpass(in_array, sigma)
-
+    
+    @staticmethod
+    @filter_wrapper
+    def invert(in_array: np.ndarray) -> np.ndarray:
+        return np.iinfo(in_array.dtype).max - in_array
+    
+    @staticmethod
+    @filter_wrapper
+    def same(in_array: np.ndarray) -> np.ndarray:
+        return in_array
+    
 
 if __name__ == '__main__':
 

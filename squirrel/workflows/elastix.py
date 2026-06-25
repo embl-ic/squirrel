@@ -415,6 +415,7 @@ def elastix_stack_alignment_workflow(
         average_for_z_step=False,
         determine_bounds=False,
         parameter_map=None,
+        max_offset_distance=None,  # Only for translation transform, in pixels, to limit the search space for the translation
         quiet=False,
         overwrite=False,
         n_workers=os.cpu_count(),
@@ -522,6 +523,10 @@ def elastix_stack_alignment_workflow(
             transforms.append(result_matrix)
             if determine_bounds:
                 bounds.append(this_bounds)
+
+    if transform == 'translation' and max_offset_distance is not None:
+        # Limit the search space for the translation
+        transforms.large_offsets_to_zero(max_offset_distance)
 
     if z_step > 1:
         transforms.set_meta('z_step', z_step)

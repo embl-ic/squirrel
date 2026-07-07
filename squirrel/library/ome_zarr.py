@@ -105,6 +105,8 @@ def create_ome_zarr(
 
     handle.attrs.update(attrs)
 
+    return handle
+
 
 def get_ome_zarr_handle(
         filepath,

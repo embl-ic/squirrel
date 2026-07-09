@@ -359,6 +359,11 @@ def write_stack(path, data, key='data', id_offset=0):
     if filetype == 'n5':
         write_n5_container(path, data, key=key)
         return
+    if filetype == 'ome_zarr':
+        from squirrel.library.ome_zarr import create_ome_zarr
+        ozh = create_ome_zarr(path, data.shape, chunk_size=(128, 128, 128))
+        ozh['s0'][:] = data
+        return
     raise ValueError(f'Invalid filetype={filetype} of target path={path}')
 
 

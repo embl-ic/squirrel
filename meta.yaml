@@ -1,5 +1,5 @@
 {% set name = "squirrel" %}
-{% set version = "0.4.13" %}
+{% set version = "0.4.14" %}
 
 package:
   name: "{{ name|lower }}"

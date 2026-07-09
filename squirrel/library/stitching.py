@@ -645,3 +645,88 @@ if __name__ == '__main__':
         )
 
         pass
+
+    if False: 
+
+        # Test6: Stitching four tiles with one object each -> successful
+
+        tile1 = np.zeros((512, 512, 512), dtype=np.uint32)
+        tile2 = np.zeros((512, 512, 512), dtype=np.uint32)
+        tile3 = np.zeros((512, 512, 512), dtype=np.uint32)
+        tile4 = np.zeros((512, 512, 512), dtype=np.uint32)
+
+        edges1, disaffinities1 = build_local_graph(
+            seg=tile1,
+            overlap=(1, 1, 1),
+            right=tile2,
+            bottom=tile3,
+            behind=tile4,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        edges2, disaffinities2 = build_local_graph(
+            seg=tile2,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        edges3, disaffinities3 = build_local_graph(
+            seg=tile3,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        edges4, disaffinities4 = build_local_graph(
+            seg=tile4,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        # One global multicut job for all tiles
+
+        label_mapping = solve_global_multicut(
+            edge_list=[edges1, edges2, edges3, edges4],
+            disaffinity_list=[disaffinities1, disaffinities2, disaffinities3, disaffinities4],
+            beta=0.5
+        )
+
+        # One job per tile to relabel and write the stitched segmentation
+
+        tile1_stitched = relabel_segmentation(
+            seg=tile1,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile2_stitched = relabel_segmentation(
+            seg=tile2,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile3_stitched = relabel_segmentation(
+            seg=tile3,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile4_stitched = relabel_segmentation(
+            seg=tile4,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        pass

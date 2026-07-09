@@ -172,6 +172,8 @@ def build_local_graph(
         list(edge_dict.keys()),
         dtype=np.uint64,
     )
+    if len(edges) == 0:
+        edges = np.empty((0, 2), dtype=np.uint64)
 
     disaffinities = np.asarray(
         list(edge_dict.values()),
@@ -237,6 +239,10 @@ def solve_global_multicut(
 
     # Merge all local graphs
     edges = np.concatenate(edge_list, axis=0)
+
+    if len(edges) == 0:
+        return {}
+
     disaffinities = np.concatenate(disaffinity_list)
 
     # Remove duplicate edges.
@@ -329,76 +335,313 @@ def relabel_segmentation(
 
 
 if __name__ == '__main__':
+        
+    if True:
 
-    import zarr
+        # Test1: Stitching two tiles 
 
-    with zarr.open("/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/", mode="r") as f:
-        tile1 = f['scale0/nuclei_labels'][:].astype('uint32')
-    with zarr.open("/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels.ome.zarr/", mode="r") as f:
-        tile2 = f['scale0/nuclei_labels'][:].astype('uint32') + 2 ** 16
+        import zarr
 
-    # One job per tile to build the local graph and compute disaffinities
+        with zarr.open("/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/", mode="r") as f:
+            tile1 = f['scale0/nuclei_labels'][:].astype('uint32')
+        with zarr.open("/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels.ome.zarr/", mode="r") as f:
+            tile2 = f['scale0/nuclei_labels'][:].astype('uint32') + 2 ** 16
 
-    edges1, disaffinities1 = build_local_graph(
-        seg=tile1,
-        overlap=(1, 1, 1),
-        right=tile2,
-        bottom=None,
-        behind=None,
-        background=0,
-        default_disaffinity=0.9,
-    )
+        # One job per tile to build the local graph and compute disaffinities
 
-    edges2, disaffinities2 = build_local_graph(
-        seg=tile2,
-        overlap=(1, 1, 1),
-        right=None,
-        bottom=None,
-        behind=None,
-        background=0,
-        default_disaffinity=0.9,
-    )
+        edges1, disaffinities1 = build_local_graph(
+            seg=tile1,
+            overlap=(1, 1, 1),
+            right=tile2,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
 
-    # One global multicut job for all tiles
+        edges2, disaffinities2 = build_local_graph(
+            seg=tile2,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
 
-    label_mapping = solve_global_multicut(
-        edge_list=[edges1, edges2],
-        disaffinity_list=[disaffinities1, disaffinities2],
-        beta=0.5
-    )
+        # One global multicut job for all tiles
 
-    # One job per tile to relabel and write the stitched segmentation
+        label_mapping = solve_global_multicut(
+            edge_list=[edges1, edges2],
+            disaffinity_list=[disaffinities1, disaffinities2],
+            beta=0.5
+        )
 
-    tile1_stitched = relabel_segmentation(
-        seg=tile1,
-        label_mapping=label_mapping,
-        background=0,
-    )
+        # One job per tile to relabel and write the stitched segmentation
 
-    tile2_stitched = relabel_segmentation(
-        seg=tile2,
-        label_mapping=label_mapping,
-        background=0,
-    )
+        tile1_stitched = relabel_segmentation(
+            seg=tile1,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile2_stitched = relabel_segmentation(
+            seg=tile2,
+            label_mapping=label_mapping,
+            background=0,
+        )
 
 
-    def _write_stitched_tile(input_store, output_store, segmentation):
-        import shutil
-        shutil.copytree(input_store, output_store, dirs_exist_ok=True)
+        def _write_stitched_tile(input_store, output_store, segmentation):
+            import shutil
+            shutil.copytree(input_store, output_store, dirs_exist_ok=True)
 
-        with zarr.open(output_store, mode="r+") as f:
-            f["scale0/nuclei_labels"][:] = segmentation.astype(
-                f["scale0/nuclei_labels"].dtype
-            )
+            with zarr.open(output_store, mode="r+") as f:
+                f["scale0/nuclei_labels"][:] = segmentation.astype(
+                    f["scale0/nuclei_labels"].dtype
+                )
 
-    _write_stitched_tile(
-        input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/",
-        output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels_stitched.ome.zarr/",
-        segmentation=tile1_stitched,
-    )
-    _write_stitched_tile(
-        input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels.ome.zarr/",
-        output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels_stitched.ome.zarr/",
-        segmentation=tile2_stitched,
-    )
-    
+        _write_stitched_tile(
+            input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/",
+            output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels_stitched.ome.zarr/",
+            segmentation=tile1_stitched,
+        )
+        _write_stitched_tile(
+            input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels.ome.zarr/",
+            output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels_stitched.ome.zarr/",
+            segmentation=tile2_stitched,
+        )
+
+    if False: 
+
+        # Test2: Stitching one single empty tile -> successful
+
+        tile1 = np.zeros((512, 512, 512), dtype=np.uint32)
+
+        edges1, disaffinities1 = build_local_graph(
+            seg=tile1,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        # One global multicut job for all tiles
+
+        label_mapping = solve_global_multicut(
+            edge_list=[edges1],
+            disaffinity_list=[disaffinities1],
+            beta=0.5
+        )
+
+        # One job per tile to relabel and write the stitched segmentation
+
+        tile1_stitched = relabel_segmentation(
+            seg=tile1,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        pass
+
+    if False:
+
+        # Test3: Stitching one populated and one one-label tile -> successful
+
+        import zarr
+
+        with zarr.open("/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/", mode="r") as f:
+            tile1 = f['scale0/nuclei_labels'][:].astype('uint32')
+        tile2 = np.ones_like(tile1) + 2 ** 16
+
+        # One job per tile to build the local graph and compute disaffinities
+
+        edges1, disaffinities1 = build_local_graph(
+            seg=tile1,
+            overlap=(1, 1, 1),
+            right=tile2,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        edges2, disaffinities2 = build_local_graph(
+            seg=tile2,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        # One global multicut job for all tiles
+
+        label_mapping = solve_global_multicut(
+            edge_list=[edges1, edges2],
+            disaffinity_list=[disaffinities1, disaffinities2],
+            beta=0.5
+        )
+
+        # One job per tile to relabel and write the stitched segmentation
+
+        tile1_stitched = relabel_segmentation(
+            seg=tile1,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile2_stitched = relabel_segmentation(
+            seg=tile2,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+
+        def _write_stitched_tile(input_store, output_store, segmentation):
+            import shutil
+            shutil.copytree(input_store, output_store, dirs_exist_ok=True)
+
+            with zarr.open(output_store, mode="r+") as f:
+                f["scale0/nuclei_labels"][:] = segmentation.astype(
+                    f["scale0/nuclei_labels"].dtype
+                )
+
+        _write_stitched_tile(
+            input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/",
+            output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels_stitched3.ome.zarr/",
+            segmentation=tile1_stitched,
+        )
+        _write_stitched_tile(
+            input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels.ome.zarr/",
+            output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels_stitched3.ome.zarr/",
+            segmentation=tile2_stitched,
+        )
+    if False:
+
+        # Test4: Stitching one populated and one zero tile -> successful
+
+        import zarr
+
+        with zarr.open("/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/", mode="r") as f:
+            tile1 = f['scale0/nuclei_labels'][:].astype('uint32')
+        tile2 = np.zeros_like(tile1)
+
+        # One job per tile to build the local graph and compute disaffinities
+
+        edges1, disaffinities1 = build_local_graph(
+            seg=tile1,
+            overlap=(1, 1, 1),
+            right=tile2,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        edges2, disaffinities2 = build_local_graph(
+            seg=tile2,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        # One global multicut job for all tiles
+
+        label_mapping = solve_global_multicut(
+            edge_list=[edges1, edges2],
+            disaffinity_list=[disaffinities1, disaffinities2],
+            beta=0.5
+        )
+
+        # One job per tile to relabel and write the stitched segmentation
+
+        tile1_stitched = relabel_segmentation(
+            seg=tile1,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile2_stitched = relabel_segmentation(
+            seg=tile2,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+
+        def _write_stitched_tile(input_store, output_store, segmentation):
+            import shutil
+            shutil.copytree(input_store, output_store, dirs_exist_ok=True)
+
+            with zarr.open(output_store, mode="r+") as f:
+                f["scale0/nuclei_labels"][:] = segmentation.astype(
+                    f["scale0/nuclei_labels"].dtype
+                )
+
+        _write_stitched_tile(
+            input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels.ome.zarr/",
+            output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000005_labels_stitched3.ome.zarr/",
+            segmentation=tile1_stitched,
+        )
+        _write_stitched_tile(
+            input_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels.ome.zarr/",
+            output_store="/media/julian/Data/projects/hennies/multicut-stitching-devel/cellpose/platy__tile_000006_labels_stitched3.ome.zarr/",
+            segmentation=tile2_stitched,
+        )
+
+    if False: 
+
+        # Test5: Stitching two tiles with one object each -> successful
+
+        tile1 = np.ones((512, 512, 512), dtype=np.uint32)
+        tile2 = np.ones((512, 512, 512), dtype=np.uint32) + 1
+
+        edges1, disaffinities1 = build_local_graph(
+            seg=tile1,
+            overlap=(1, 1, 1),
+            right=None,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        edges2, disaffinities2 = build_local_graph(
+            seg=tile2,
+            overlap=(1, 1, 1),
+            right=tile1,
+            bottom=None,
+            behind=None,
+            background=0,
+            default_disaffinity=0.9,
+        )
+
+        # One global multicut job for all tiles
+
+        label_mapping = solve_global_multicut(
+            edge_list=[edges1, edges2],
+            disaffinity_list=[disaffinities1, disaffinities2],
+            beta=0.5
+        )
+
+        # One job per tile to relabel and write the stitched segmentation
+
+        tile1_stitched = relabel_segmentation(
+            seg=tile1,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        tile2_stitched = relabel_segmentation(
+            seg=tile2,
+            label_mapping=label_mapping,
+            background=0,
+        )
+
+        pass

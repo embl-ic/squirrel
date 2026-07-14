@@ -25,6 +25,8 @@ def filter_2d():
                         help='*.json file defining the filters as described in the --filters argument. \n'
                              'Using a parameter file should be preferred especially for filters with complex arguments '
                              '(CLAHE, VSNR) or for long filter pipelines. ')
+    parser.add_argument('--save_intermediates', action='store_true',
+                        help='Saves intermediate files to a directory alongside the filtered result. Directory name is the basename of the output_filepath.')
     parser.add_argument('-v', '--verbose', action='store_true')
 
     args = parser.parse_args()

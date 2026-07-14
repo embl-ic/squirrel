@@ -22,9 +22,9 @@ def filter_2d_workflow(
 
     imf = ImageFilter(img)
     if not save_intermediates:
-        filtered_image = imf.get_filtered(filters)
+        filtered_image = imf.get_filtered(filters, verbose=verbose)
     else:
-        filtered_image, intermediates = imf.get_filtered(filters, return_intermediates=True)
+        filtered_image, intermediates = imf.get_filtered(filters, return_intermediates=True, verbose=verbose)
         if not os.path.exists(os.path.splitext(out_filepath)[0]):
             os.mkdir(os.path.splitext(out_filepath)[0])
         for idx, intermediate in enumerate(intermediates):

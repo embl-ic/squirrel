@@ -34,6 +34,7 @@ def filter_2d():
     out_filepath = args.out_filepath
     filters = args.filters
     filters_file = args.filters_file
+    save_intermediates = args.save_intermediates
     verbose = args.verbose
 
     if not (bool(filters is None) ^ bool(filters_file is None)):
@@ -48,5 +49,6 @@ def filter_2d():
         input_filepath,
         out_filepath,
         filters=filters,
+        save_intermediates=save_intermediates,
         verbose=verbose
     )

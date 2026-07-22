@@ -778,13 +778,8 @@ class OMEZarrStore:
         overwrite=False,
     ):
 
-        ome_version = validate_ome_version(
-            ome_version,
-        )
-
-        zarr_format = validate_zarr_format(
-            zarr_format,
-        )
+        ome_version = validate_ome_version(ome_version)
+        zarr_format = validate_zarr_format(zarr_format)
 
         import numbers
         if isinstance(chunks[0], numbers.Number):
@@ -793,17 +788,12 @@ class OMEZarrStore:
             raise ValueError(f'Number of chunk sizes={len(chunks)} must match downsample factor count + 1={len(downsample_factors) + 1}!')
 
         if os.path.exists(path):
-
             if overwrite:
                 shutil.rmtree(path)
             else:
                 raise FileExistsError(path)
 
-        root = zarr.open(
-            path,
-            mode="w",
-            zarr_format=zarr_format,
-        )
+        root = zarr.open(path, mode="w", zarr_format=zarr_format)
 
         current_shape = np.asarray(shape)
 
@@ -819,20 +809,10 @@ class OMEZarrStore:
             if zarr_format == 3 and shards is not None:
                 kwargs["shards"] = shards
 
-            root.create_array(
-                f"s{level}",
-                **kwargs,
-            )
+            root.create_array(f"s{level}", **kwargs)
 
             if level < len(downsample_factors):
-
-                current_shape = np.maximum(
-                    1,
-                    current_shape //
-                    np.asarray(
-                        downsample_factors[level]
-                    ),
-                )
+                current_shape = np.maximum(1, current_shape // np.asarray(downsample_factors[level]))
 
         OMEZarrMetadata.create(
             root,
@@ -844,36 +824,24 @@ class OMEZarrStore:
             zarr_format=zarr_format,
         )
 
-        return OMEZarrStore(
-            path,
-            mode="r+",
-        )
+        return OMEZarrStore(path, mode="r+")
 
     
     # -------------------------------------------------------------------------
     # Dataset access
     # -------------------------------------------------------------------------
 
-    def dataset(
-        self,
-        level,
-    ):
+    def dataset(self, level):
 
         return self.root[
             self.metadata.levels[level]
         ]
 
-    def shape(
-        self,
-        level,
-    ):
+    def shape(self, level):
 
         return self.dataset(level).shape
 
-    def chunks(
-        self,
-        level,
-    ):
+    def chunks(self, level):
 
         ds = self.dataset(level)
 
@@ -882,10 +850,7 @@ class OMEZarrStore:
 
         return None
 
-    def shards(
-        self,
-        level,
-    ):
+    def shards(self, level):
 
         ds = self.dataset(level)
 
@@ -893,6 +858,18 @@ class OMEZarrStore:
             return ds.shards
 
         return None
+
+    def get_scale(self, level):
+
+        return self.root.attrs['multiscales'][0]['datasets'][level]['coordinateTransformations'][0]['scale']
+
+    def get_unit(self):
+        units = self.root.attrs['multiscales'][0]['axes']
+        assert units[0] == units[1] == units[2], f'units = {units}'
+        return units[0]
+
+    def get_dtype(self, level):
+        return self.dataset(level).dtype
 
     # -------------------------------------------------------------------------
     # Reading
@@ -1054,40 +1031,17 @@ class OMEZarrStore:
         self.pyramid.rebuild()
 
 
-# =============================================================================
-# For backwards compatibility
-# =============================================================================
+if __name__ == '__main__':
+
+    fp = '/media/julian/Data/tmp/create_ome_zarr_test.ome.zarr'
+    store = OMEZarrStore.create(
+        path=fp,
+        dtype='uint8',
+        shape=(256, 256, 256),
+        overwrite=True,
+        ome_version='0.5',
+        zarr_format=3
+    )
 
 
-def get_ome_zarr_handle(
-        filepath,
-        key=None,
-        mode='r'
-):
-    # TODO: Implement into OMEZarrStore
-    if mode != 'r':
-        raise ValueError('Only supporting reading this way. Use the OMEZarrStore to write or append datasets!')
-    
-    from zarr import open as zarr_open
-    if key is not None:
-        return zarr_open(filepath, mode=mode)[key]
-    return zarr_open(filepath, mode=mode)
-
-
-def get_scale_of_downsample_level(handle, downsample_level):
-    # TODO: Implement into OMEZarrStore
-    datasets = handle.attrs['multiscales'][0]['datasets']
-    this_dataset = datasets[downsample_level]
-    this_path = this_dataset['path']
-    assert this_path == f's{downsample_level}', \
-        f'Invalid path to downsample level combination: {this_path} != s{downsample_level}'
-
-    return this_dataset['coordinateTransformations'][0]['scale']
-
-
-def get_unit_of_dataset(handle):
-    # TODO: Implement into OMEZarrStore
-    units = [x['unit'] for x in handle.attrs['multiscales'][0]['axes']]
-    assert units[0] == units[1] == units[2]
-    return units[0]
 

@@ -248,9 +248,15 @@ def load_data_handle(path, key=None, pattern=None):
         return h, h.shape
 
     if filetype == 'ome_zarr':
-        from squirrel.library.ome_zarr import get_ome_zarr_handle
-        h = get_ome_zarr_handle(path, key if key is not None else 's0', 'r')
-        return h, h.shape
+        from squirrel.library.ome_zarr import OMEZarrStore
+        oz = OMEZarrStore(path, mode='r')
+        if isinstance(key, int):
+            level = key
+        elif isinstance(key, str) and key.startswith('s'):
+            level = int(key[1:])
+        else: 
+            raise ValueError(f'Only accepting datasets with a key of the format "sx"')
+        return oz.dataset(level), oz.shape(level)
 
     raise RuntimeError(f'No valid filetype: {filetype}')
 

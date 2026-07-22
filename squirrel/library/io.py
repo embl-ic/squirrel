@@ -255,7 +255,7 @@ def load_data_handle(path, key=None, pattern=None):
         elif isinstance(key, str) and key.startswith('s'):
             level = int(key[1:])
         else: 
-            raise ValueError(f'Only accepting datasets with a key of the format "sx"')
+            raise ValueError(f'Only accepting datasets with a key of the format "sx". Got {key}')
         return oz.dataset(level), oz.shape(level)
 
     raise RuntimeError(f'No valid filetype: {filetype}')
@@ -366,9 +366,15 @@ def write_stack(path, data, key='data', id_offset=0):
         write_n5_container(path, data, key=key)
         return
     if filetype == 'ome_zarr':
-        from squirrel.library.ome_zarr import create_ome_zarr
-        ozh = create_ome_zarr(path, data.shape, chunk_size=(128, 128, 128))
-        ozh['s0'][:] = data
+        from squirrel.library.ome_zarr import OMEZarrStore
+        oz = OMEZarrStore.create(
+            path=path,
+            dtype=data.dtype,
+            chunks=(128, 128, 128),
+            shape=data.shape,
+            shards=None
+        )
+        oz.write(0, position=[0, 0, 0], data=data, update_pyramid=True)
         return
     raise ValueError(f'Invalid filetype={filetype} of target path={path}')
 

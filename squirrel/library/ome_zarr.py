@@ -864,7 +864,7 @@ class OMEZarrStore:
         return self.root.attrs['multiscales'][0]['datasets'][level]['coordinateTransformations'][0]['scale']
 
     def get_unit(self):
-        units = self.root.attrs['multiscales'][0]['axes']
+        units = [x['unit'] for x in self.root.attrs['multiscales'][0]['axes']]
         assert units[0] == units[1] == units[2], f'units = {units}'
         return units[0]
 

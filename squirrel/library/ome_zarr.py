@@ -179,12 +179,7 @@ def storage_grid(dataset):
     return tuple(dataset.chunks)
 
 
-def check_grid_alignment(
-    position,
-    shape,
-    grid_shape,
-    dataset_shape,
-):
+def check_grid_alignment(position, shape, grid_shape, dataset_shape):
 
     position = np.asarray(position)
     shape = np.asarray(shape)
@@ -194,12 +189,7 @@ def check_grid_alignment(
     if np.any(position % grid_shape):
         return False
 
-    for p, s, g, ds in zip(
-        position,
-        shape,
-        grid_shape,
-        dataset_shape,
-    ):
+    for p, s, g, ds in zip(position, shape, grid_shape, dataset_shape):
 
         if p + s == ds:
             continue
@@ -527,13 +517,17 @@ class OMEZarrMetadata:
             self.downsample_factors
         )
 
-    def storage_grid(
-        self,
-        dataset,
-    ):
+    @property
+    def units(self):
+        units = [axis.get("unit") for axis in self.axes]
+        assert len(set(units)) == 1
+        return units[0]
 
+    def storage_grid(self, dataset):
         return storage_grid(dataset)
 
+    def scale(self, level):
+        return tuple(self.datasets[level]["scale"])
 
 # =============================================================================
 # Pyramid generation
@@ -859,16 +853,13 @@ class OMEZarrStore:
 
         return None
 
-    def get_scale(self, level):
+    # def get_scale(self, level):
+    #     return self.metadata.scale(level)
 
-        return self.root.attrs['multiscales'][0]['datasets'][level]['coordinateTransformations'][0]['scale']
+    # def get_unit(self):
+    #     return self.metadata.units
 
-    def get_unit(self):
-        units = [x['unit'] for x in self.root.attrs['multiscales'][0]['axes']]
-        assert units[0] == units[1] == units[2], f'units = {units}'
-        return units[0]
-
-    def get_dtype(self, level):
+    def dtype(self, level):
         return self.dataset(level).dtype
 
     # -------------------------------------------------------------------------
@@ -893,57 +884,25 @@ class OMEZarrStore:
     # Alignment
     # -------------------------------------------------------------------------
 
-    def check_alignment(
-        self,
-        level,
-        position,
-        shape,
-    ):
+    def check_alignment(self, level, position, shape):
 
         ds = self.dataset(level)
 
-        if not check_grid_alignment(
-            position,
-            shape,
-            self.metadata.storage_grid(ds),
-            ds.shape,
-        ):
+        if not check_grid_alignment(position, shape, self.metadata.storage_grid(ds), ds.shape):
+            raise ValueError(f'ROI is not aligned to storage grid of level {level}.')
 
-            raise ValueError(
-                f"ROI is not aligned to storage grid "
-                f"of level {level}."
-            )
-
-    def check_pyramid_alignment(
-        self,
-        level,
-        position,
-        shape,
-    ):
+    def check_pyramid_alignment(self, level, position, shape):
 
         position = np.asarray(position)
         shape = np.asarray(shape)
 
-        for lvl in range(
-            level,
-            len(self.metadata.levels),
-        ):
+        for lvl in range(level, len(self.metadata.levels)):
 
-            self.check_alignment(
-                lvl,
-                position,
-                shape,
-            )
+            self.check_alignment(lvl, position, shape)
 
-            if lvl < len(
-                self.metadata.downsample_factors
-            ):
+            if lvl < len(self.metadata.downsample_factors):
 
-                factor = np.asarray(
-                    self.metadata.downsample_factors[
-                        lvl
-                    ]
-                )
+                factor = np.asarray(self.metadata.downsample_factors[lvl])
 
                 position //= factor
                 shape //= factor
@@ -1042,6 +1001,7 @@ if __name__ == '__main__':
         ome_version='0.5',
         zarr_format=3
     )
+    store.get_unit()
 
 
 

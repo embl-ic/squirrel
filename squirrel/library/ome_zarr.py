@@ -1,451 +1,1047 @@
+# =============================================================================
+# Imports
+# =============================================================================
+
+import os
+import shutil
 
 import numpy as np
+import zarr
 
 
-def _normalize_chunk_size(chunk_size, n_levels):
-    chunk_size = np.array(chunk_size).tolist()
-    if isinstance(chunk_size[0], int):
-        return np.array([chunk_size] * n_levels)
-    if isinstance(chunk_size[0], list):
-        assert len(chunk_size) == n_levels
-        return np.array(chunk_size)
-    raise ValueError(f'Invalid chunk size: {chunk_size}')
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+def open_ome_zarr(path, mode="r"):
+    """Open an OME-Zarr group."""
+    return zarr.open(path, mode=mode)
 
 
-def create_ome_zarr(
-        filepath,
-        shape,
-        resolution=(1., 1., 1.),
-        unit='pixel',
-        downsample_type='Average',  # One of ['Average', 'Sample']
-        downsample_factors=(2, 2, 2),
-        chunk_size=(1, 256, 256),
-        dtype='uint8',
-        name=None,
-        verbose=False
-):
+# -----------------------------------------------------------------------------
+# Version handling
+# -----------------------------------------------------------------------------
 
-    if verbose:
-        print(f'cunk_size = {chunk_size}')
-    chunk_size = _normalize_chunk_size(chunk_size, len(downsample_factors) + 1)
-    if verbose: 
-        print(f'chunk_size = {chunk_size}')
 
-    from zarr import open as zarr_open
-    from numcodecs import Blosc
-    handle = zarr_open(filepath, mode='w')
-    handle.create_dataset(
-        's0',
-        shape=shape,
-        compressor=Blosc(cname='zstd', clevel=9),
-        chunks=chunk_size[0],
-        dtype=dtype,
-        dimension_separator='/'
-    )
+def detect_ome_version(root):
+    """
+    Detect the OME-NGFF version.
 
-    if name == None:
-        import os
-        name = str.replace(os.path.split(filepath)[1], '.ome.zarr', '')
+    Returns
+    -------
+    str
+        "0.4" or "0.5"
+    """
 
-    def dataset(path, scale):
-        return dict(
-            path=path,
-            coordinateTransformations=[
-                dict(
-                    type='scale',
-                    scale=scale
-                )
-            ]
+    attrs = root.attrs
+
+    if "multiscales" not in attrs:
+        raise ValueError("Not an OME-Zarr dataset.")
+
+    ms = attrs["multiscales"][0]
+
+    return ms.get("version", "0.4")
+
+
+def detect_zarr_format(root):
+    """
+    Detect the Zarr format version.
+
+    Returns
+    -------
+    int
+        2 or 3
+    """
+
+    metadata = getattr(root, "metadata", None)
+
+    if metadata is None:
+        return 2
+
+    return getattr(metadata, "zarr_format", 2)
+
+
+def validate_ome_version(version):
+
+    version = str(version)
+
+    if version not in ("0.4", "0.5"):
+        raise ValueError(
+            f"Unsupported OME version: {version}"
         )
 
-    def axes():
-        return [
-            dict(
-                name=axis,
-                type='space',
-                unit=unit
-            )
-            for axis in 'zyx'
+    return version
+
+
+def validate_zarr_format(version):
+
+    version = int(version)
+
+    if version not in (2, 3):
+        raise ValueError(
+            f"Unsupported Zarr format: {version}"
+        )
+
+    return version
+
+
+def validate_downsample_method(method):
+
+    method = method.lower()
+
+    if method not in ("average", "sample"):
+        raise ValueError(
+            f"Unsupported downsampling method: {method}"
+        )
+
+    return method.title()
+
+
+# -----------------------------------------------------------------------------
+# ROI utilities
+# -----------------------------------------------------------------------------
+
+
+def make_slice(position, shape):
+
+    position = np.asarray(position)
+    shape = np.asarray(shape)
+
+    return tuple(
+        slice(p, p + s)
+        for p, s in zip(position, shape)
+    )
+
+
+def roi_to_next_level(position, shape, factor):
+
+    position = np.asarray(position)
+    shape = np.asarray(shape)
+    factor = np.asarray(factor)
+
+    return (
+        position // factor,
+        shape // factor,
+    )
+
+
+def expand_roi(position, shape, factor):
+
+    position = np.asarray(position)
+    shape = np.asarray(shape)
+    factor = np.asarray(factor)
+
+    start = (position // factor) * factor
+
+    end = (
+        (position + shape + factor - 1)
+        // factor
+    ) * factor
+
+    return start, end - start
+
+
+def crop_roi(position, shape, dataset_shape):
+
+    position = np.asarray(position)
+    shape = np.asarray(shape)
+    dataset_shape = np.asarray(dataset_shape)
+
+    start = np.maximum(position, 0)
+
+    end = np.minimum(
+        position + shape,
+        dataset_shape,
+    )
+
+    return start, end - start
+
+
+# -----------------------------------------------------------------------------
+# Alignment
+# -----------------------------------------------------------------------------
+
+def storage_grid(dataset):
+    """
+    Return the storage grid of a dataset.
+
+    v2  -> chunks
+    v3  -> shards (if present), otherwise chunks
+    """
+
+    if hasattr(dataset, "shards"):
+
+        shards = dataset.shards
+
+        if shards is not None:
+            return tuple(shards)
+
+    return tuple(dataset.chunks)
+
+
+def check_grid_alignment(
+    position,
+    shape,
+    grid_shape,
+    dataset_shape,
+):
+
+    position = np.asarray(position)
+    shape = np.asarray(shape)
+    grid_shape = np.asarray(grid_shape)
+    dataset_shape = np.asarray(dataset_shape)
+
+    if np.any(position % grid_shape):
+        return False
+
+    for p, s, g, ds in zip(
+        position,
+        shape,
+        grid_shape,
+        dataset_shape,
+    ):
+
+        if p + s == ds:
+            continue
+
+        if s % g:
+            return False
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# Pyramid utilities
+# -----------------------------------------------------------------------------
+
+
+def cumulative_downsample_factors(factors):
+
+    cumulative = []
+
+    current = np.ones(
+        len(factors[0]),
+        dtype=int,
+    )
+
+    for factor in factors:
+
+        current *= np.asarray(factor)
+
+        cumulative.append(tuple(current))
+
+    return cumulative
+
+
+def compute_scales(
+    resolution,
+    downsample_factors,
+):
+
+    scales = [
+        np.asarray(
+            resolution,
+            dtype=float,
+        )
+    ]
+
+    current = scales[0].copy()
+
+    for factor in downsample_factors:
+
+        current = current * np.asarray(factor)
+
+        scales.append(current.copy())
+
+    return [
+        s.tolist()
+        for s in scales
+    ]
+
+
+# =============================================================================
+# Metadata
+# =============================================================================
+
+
+class OMEZarrMetadata:
+
+    def __init__(self, root):
+
+        self.root = root
+
+        self.ome_version = detect_ome_version(root)
+        self.zarr_format = detect_zarr_format(root)
+
+        self.datasets = []
+        self.axes = None
+        self.downsample_method = None
+
+        self._parse()
+
+    # -------------------------------------------------------------------------
+    # Creation
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def create(
+        root,
+        downsample_factors=((2, 2, 2),),
+        resolution=(1., 1., 1.),
+        unit="micrometer",
+        downsample_method="Average",
+        ome_version="0.5",
+        zarr_format=3,
+    ):
+
+        md = OMEZarrMetadata.__new__(OMEZarrMetadata)
+
+        md.root = root
+
+        md.ome_version = validate_ome_version(
+            ome_version
+        )
+
+        md.zarr_format = validate_zarr_format(
+            zarr_format
+        )
+
+        md.downsample_method = validate_downsample_method(
+            downsample_method
+        )
+
+        md.axes = [
+            {
+                "name": "z",
+                "type": "space",
+                "unit": unit,
+            },
+            {
+                "name": "y",
+                "type": "space",
+                "unit": unit,
+            },
+            {
+                "name": "x",
+                "type": "space",
+                "unit": unit,
+            },
         ]
 
-    handle.attrs.update(
-        dict(
-            multiscales=[
-                dict(
-                    axes=axes(),
-                    datasets=[dataset('s0', list(resolution))],
-                    name=name,
-                    type=downsample_type,
-                    version="0.4"
+        scales = compute_scales(
+            resolution,
+            downsample_factors,
+        )
+
+        md.datasets = []
+
+        for idx, scale in enumerate(scales):
+
+            md.datasets.append(
+                {
+                    "path": f"s{idx}",
+                    "scale": scale,
+                }
+            )
+
+        md.write()
+
+        return md
+
+    # -------------------------------------------------------------------------
+    # Parsing
+    # -------------------------------------------------------------------------
+
+    def _parse(self):
+
+        if self.ome_version == "0.4":
+
+            self._parse_ngff04()
+            return
+
+        if self.ome_version == "0.5":
+
+            self._parse_ngff05()
+            return
+
+        raise RuntimeError(
+            f"Unsupported NGFF version: {self.ome_version}"
+        )
+
+    def _parse_ngff04(self):
+
+        ms = self.root.attrs["multiscales"][0]
+
+        self.axes = ms["axes"]
+
+        self.downsample_method = ms.get(
+            "type",
+            "Average",
+        )
+
+        self.datasets = []
+
+        for ds in ms["datasets"]:
+
+            self.datasets.append(
+                {
+                    "path": ds["path"],
+                    "scale": ds["coordinateTransformations"][0]["scale"],
+                }
+            )
+
+    def _parse_ngff05(self):
+
+        #
+        # Current implementation is identical.
+        # If NGFF evolves further this function can diverge.
+        #
+
+        self._parse_ngff04()
+
+    # -------------------------------------------------------------------------
+    # Writing
+    # -------------------------------------------------------------------------
+
+    def write(self):
+
+        if self.ome_version == "0.4":
+
+            self._write_ngff04()
+            return
+
+        if self.ome_version == "0.5":
+
+            self._write_ngff05()
+            return
+
+        raise RuntimeError
+
+    def _write_ngff04(self):
+
+        datasets = []
+
+        for ds in self.datasets:
+
+            datasets.append(
+                {
+                    "path": ds["path"],
+                    "coordinateTransformations": [
+                        {
+                            "type": "scale",
+                            "scale": ds["scale"],
+                        }
+                    ],
+                }
+            )
+
+        self.root.attrs["multiscales"] = [
+            {
+                "version": "0.4",
+                "name": "/",
+                "axes": self.axes,
+                "datasets": datasets,
+                "type": self.downsample_method,
+            }
+        ]
+
+    def _write_ngff05(self):
+
+        datasets = []
+
+        for ds in self.datasets:
+
+            datasets.append(
+                {
+                    "path": ds["path"],
+                    "coordinateTransformations": [
+                        {
+                            "type": "scale",
+                            "scale": ds["scale"],
+                        }
+                    ],
+                }
+            )
+
+        self.root.attrs["multiscales"] = [
+            {
+                "version": "0.5",
+                "name": "/",
+                "axes": self.axes,
+                "datasets": datasets,
+                "type": self.downsample_method,
+            }
+        ]
+
+    # -------------------------------------------------------------------------
+    # Properties
+    # -------------------------------------------------------------------------
+
+    @property
+    def levels(self):
+
+        return [
+            ds["path"]
+            for ds in self.datasets
+        ]
+
+    @property
+    def scales(self):
+
+        return [
+            ds["scale"]
+            for ds in self.datasets
+        ]
+
+    @property
+    def downsample_factors(self):
+
+        factors = []
+
+        prev = np.asarray(
+            self.scales[0],
+            dtype=float,
+        )
+
+        for scale in self.scales[1:]:
+
+            scale = np.asarray(
+                scale,
+                dtype=float,
+            )
+
+            factors.append(
+                tuple(
+                    (scale / prev).astype(int)
+                )
+            )
+
+            prev = scale
+
+        return factors
+
+    @property
+    def cumulative_downsample_factors(self):
+
+        return cumulative_downsample_factors(
+            self.downsample_factors
+        )
+
+    def storage_grid(
+        self,
+        dataset,
+    ):
+
+        return storage_grid(dataset)
+
+
+# =============================================================================
+# Pyramid generation
+# =============================================================================
+
+
+class PyramidBuilder:
+
+    def __init__(self, store):
+
+        self.store = store
+
+    # -------------------------------------------------------------------------
+    # Downsampling
+    # -------------------------------------------------------------------------
+
+    def downsample(
+        self,
+        array,
+        factor,
+    ):
+
+        factor = np.asarray(factor)
+
+        method = self.store.metadata.downsample_method.lower()
+
+        if method == "sample":
+
+            return array[
+                tuple(
+                    slice(None, None, f)
+                    for f in factor
                 )
             ]
-        )
-    )
 
-    scale = 1
-    s_idx = 0
-    for downsample_factor in downsample_factors:
+        if method == "average":
 
-        scale *= downsample_factor
-        s_idx += 1
+            #
+            # Pad to next multiple of factor.
+            # This handles image boundaries cleanly.
+            #
 
-        handle.create_dataset(
-            f's{s_idx}',
-            shape=(np.array(shape) / scale).astype(int).tolist(),
-            compression='gzip',
-            chunks=chunk_size[s_idx],
-            dtype=dtype,
-            dimension_separator='/'
-        )
+            shape = np.asarray(array.shape)
 
-        attrs = handle.attrs
-        attrs['multiscales'][0]['datasets'].append(
-            dataset(f's{s_idx}', list(np.array(resolution) * scale))
-        )
-
-    handle.attrs.update(attrs)
-
-    return handle
-
-
-def get_ome_zarr_handle(
-        filepath,
-        key=None,
-        mode='r'
-):
-    from zarr import open as zarr_open
-    if key is not None:
-        return zarr_open(filepath, mode=mode)[key]
-    return zarr_open(filepath, mode=mode)
-
-
-def get_downsample_order(ome_zarr_handle):
-
-    ds_type = ome_zarr_handle.attrs['multiscales'][0]['type']
-
-    if ds_type == 'Average':
-        return 0
-    if ds_type == 'Sample':
-        return 1
-    raise ValueError(f'Invalid down-sample type: {ds_type}')
-
-
-def downsample_ome_zarr_chunk(
-        chunk_position,
-        chunk_shape,
-        ome_zarr_handle,
-        verbose=False
-):
-
-    from ..library.affine_matrices import AffineMatrix
-    from ..library.transformation import setup_scale_matrix, apply_affine_transform
-
-    downsample_factors = [1] + get_downsample_factors(ome_zarr_handle)
-
-    print(f'chunk_position = {chunk_position}')
-    print(f'chunk_shape = {chunk_shape}')
-    print(f'downsample_factors = {downsample_factors}')
-
-    chunk_position = np.array(chunk_position)
-    chunk_shape = np.array(chunk_shape)
-    prev_v = None
-
-    for idx, (k, v) in enumerate(ome_zarr_handle.items()):
-        chunks = np.array(v.chunks)
-        shape = np.array(v.shape)
-        prev_chunk_position = chunk_position.copy()
-        prev_chunk_shape = chunk_shape.copy()
-        chunk_position = (chunk_position / downsample_factors[idx]).astype(int)
-        chunk_shape = (chunk_shape / downsample_factors[idx]).astype(int)
-
-        # Some assertions to make sure the chunks boundaries match the requested location
-        for dim in range(v.ndim):
-            assert chunk_shape[dim] / chunks[dim] == int(chunk_shape[dim] / chunks[dim]) or chunk_position[dim] + chunk_shape[dim] == shape[dim], \
-                f"Given chunk size and ome_zarr chunks boundaries don't match for {k} in dimension {dim}; " \
-                f"{chunk_shape[dim] / chunks[dim]} != {int(chunk_shape[dim] / chunks[dim])} and " \
-                f"{chunk_position[dim] + chunk_shape[dim]} != {shape[dim]}"
-            assert chunk_position[dim] / chunks[dim] == int(chunk_position[dim] / chunks[dim]), \
-                f"Given chunk position and ome_zarr chunks boundaries don't match for {k} in dimension {dim}; " \
-                f"{chunk_position[dim] / chunks[dim]} != {int(chunk_position[dim] / chunks[dim])}"
-
-        if idx > 0:
-
-            downsample_factor = downsample_factors[idx]
-            downsample_order = get_downsample_order(ome_zarr_handle)
-
-            transform_matrix = AffineMatrix(
-                parameters=setup_scale_matrix([downsample_factor] * 3, ndim=3).flatten()
+            padded_shape = (
+                np.ceil(shape / factor).astype(int)
+                * factor
             )
 
-            source_data = prev_v[prev_chunk_position[0]: prev_chunk_position[0] + prev_chunk_shape[0],
-                                 prev_chunk_position[1]: prev_chunk_position[1] + prev_chunk_shape[1],
-                                 prev_chunk_position[2]: prev_chunk_position[2] + prev_chunk_shape[2]]
+            if np.any(shape != padded_shape):
 
-            target_data = apply_affine_transform(
-                source_data,
-                transform_matrix,
-                order=downsample_order,
-                scale_canvas=True,
-                no_offset_to_center=True,
-                verbose=verbose
+                pad_width = [
+                    (0, p - s)
+                    for s, p in zip(
+                        shape,
+                        padded_shape,
+                    )
+                ]
+
+                array = np.pad(
+                    array,
+                    pad_width,
+                    mode="edge",
+                )
+
+                shape = padded_shape
+
+            new_shape = shape // factor
+
+            reshape = []
+
+            for n, f in zip(
+                new_shape,
+                factor,
+            ):
+
+                reshape.extend([n, f])
+
+            axes = tuple(
+                range(
+                    1,
+                    len(reshape),
+                    2,
+                )
             )
 
-            v[chunk_position[0]: chunk_position[0] + chunk_shape[0],
-              chunk_position[1]: chunk_position[1] + chunk_shape[1],
-              chunk_position[2]: chunk_position[2] + chunk_shape[2]] = target_data
+            return (
+                array
+                .reshape(reshape)
+                .mean(axis=axes)
+                .astype(array.dtype)
+            )
 
-        prev_v = v
-
-
-def chunk_to_ome_zarr(
-        chunk_data,
-        chunk_position,
-        ome_zarr_handle,
-        key='s0',
-        populate_downsample_layers=False,
-        verbose=False
-):
-
-    sl = np.s_[
-        chunk_position[0]: chunk_position[0] + chunk_data.shape[0],
-        chunk_position[1]: chunk_position[1] + chunk_data.shape[1],
-        chunk_position[2]: chunk_position[2] + chunk_data.shape[2]
-    ]
-    print(f'sl = {sl}')
-    ome_zarr_handle[key][sl] = chunk_data
-
-    if populate_downsample_layers:
-        assert key == 's0'
-        downsample_ome_zarr_chunk(
-            chunk_position,
-            chunk_data.shape,
-            ome_zarr_handle,
-            verbose=verbose
+        raise ValueError(
+            f"Unknown downsampling method: {method}"
         )
 
+    # -------------------------------------------------------------------------
+    # Pyramid update
+    # -------------------------------------------------------------------------
 
-# NOTE: Deprecated
-# def slice_to_ome_zarr(
-#         stack_path,
-#         slice_idx,
-#         ome_zarr_handle,
-#         stack_key='data',
-#         stack_pattern='*.tif',
-#         save_bounds=False,
-#         verbose=False
-# ):
-#     print(f'slice_idx = {slice_idx}')
-#     if verbose:
-#         print(f'stack_path = {stack_path}')
-#         print(f'ome_zarr_handle = {ome_zarr_handle}')
-#         print(f'save_bounds = {save_bounds}')
-#
-#     from .io import load_data_from_handle_stack, load_data_handle
-#
-#     data_handle, shape_h = load_data_handle(stack_path, key=stack_key, pattern=stack_pattern)
-#     slice_data, _ = load_data_from_handle_stack(data_handle, slice_idx)
-#     if verbose:
-#         print(f'loaded slice data...')
-#
-#     if save_bounds:
-#         # TODO this
-#         pass
-#
-#     ome_zarr_handle[slice_idx, :] = slice_data
-#     if verbose:
-#         print(f'slice data written')
-#
-#
-# def process_slice_to_ome_zarr(
-#         stack_path,
-#         z_range,
-#         ome_zarr_filepath,
-#         stack_key='data',
-#         stack_pattern='*.tif',
-#         save_bounds=False,
-#         n_threads=1,
-#         verbose=False
-# ):
-#
-#     ome_zarr_h = get_ome_zarr_handle(ome_zarr_filepath, 's0', 'a')
-#
-#     if n_threads == 1:
-#
-#         for idx in range(*z_range):
-#             slice_to_ome_zarr(
-#                 stack_path,
-#                 idx,
-#                 ome_zarr_h,
-#                 stack_key=stack_key,
-#                 stack_pattern=stack_pattern,
-#                 save_bounds=save_bounds,
-#                 verbose=verbose
-#             )
-#
-#     else:
-#
-#         from multiprocessing import Pool
-#         with Pool(processes=n_threads) as p:
-#             tasks = [
-#                 p.apply_async(slice_to_ome_zarr, (
-#                     stack_path,
-#                     idx,
-#                     ome_zarr_h,
-#                     stack_key,
-#                     stack_pattern,
-#                     save_bounds,
-#                     verbose
-#                 ))
-#                 for idx in range(*z_range)
-#             ]
-#             [task.get() for task in tasks]
-#
-#
-# def slice_of_downsampling_layer(
-#         source_ome_zarr_handle,
-#         target_ome_zarr_handle,
-#         # source_slice_idx,
-#         target_slice_idx,
-#         downsample_factor=2,
-#         downsample_order=1,
-#         verbose=False
-# ):
-#
-#     print(f'target_slice_idx = {target_slice_idx}')
-#     if verbose:
-#         print(f'source_ome_zarr_handle = {source_ome_zarr_handle}')
-#         print(f'target_ome_zarr_handle = {target_ome_zarr_handle}')
-#         print(f'downsample_factor = {downsample_factor}')
-#
-#     from .transformation import apply_affine_transform, setup_scale_matrix, validate_and_reshape_matrix
-#
-#     source_slice_idx = target_slice_idx * downsample_factor
-#     source_data = source_ome_zarr_handle[source_slice_idx: source_slice_idx + downsample_factor]
-#     if downsample_order == 0:
-#         source_data = source_data[int(downsample_factor / 2) - 1, :]
-#     elif downsample_order == 1:
-#         source_data = np.mean(source_data, axis=0)
-#     else:
-#         raise NotImplementedError(f'Downsample order = {downsample_order} is not implemented!')
-#     transform_matrix = validate_and_reshape_matrix(
-#         setup_scale_matrix([downsample_factor] * 2, ndim=2),
-#         ndim=2
-#     )
-#     target_data = apply_affine_transform(
-#         source_data,
-#         transform_matrix,
-#         order=downsample_order,
-#         scale_canvas=True,
-#         no_offset_to_center=True,
-#         verbose=verbose
-#     )
-#     # # For a reason that I currently don't understand this does not work
-#     # #   Regardless of downsample_order is always produces as if it was downsample_order=0
-#     # transform_matrix = validate_and_reshape_matrix(
-#     #     setup_scale_matrix([downsample_factor] * 3, ndim=3),
-#     #     ndim=3
-#     # )
-#     # target_data = apply_affine_transform(
-#     #     source_data,
-#     #     transform_matrix,
-#     #     order=downsample_order,
-#     #     scale_canvas=True,
-#     #     no_offset_to_center=True,
-#     #     verbose=verbose
-#     # )
-#
-#     # this_slice_idx = int(source_slice_idx / downsample_factor)
-#     this_slice_idx = target_slice_idx
-#     target_data = target_data.squeeze()
-#     try:
-#         target_ome_zarr_handle[this_slice_idx, :] = target_data
-#     except ValueError:
-#         # This happens if, due to downscaling, the target slice is one pixel larger than the ome-zarr dataset
-#         this_shape = target_ome_zarr_handle[this_slice_idx].shape
-#         target_ome_zarr_handle[this_slice_idx, :] = target_data[:this_shape[0], :this_shape[1]]
-#
-#
-# def compute_downsampling_layer(
-#         ome_zarr_filepath,
-#         z_range,
-#         source_layer,
-#         target_layer,
-#         downsample_factor=2,
-#         downsample_order=1,
-#         n_threads=1,
-#         verbose=False
-# ):
-#
-#     source_h = get_ome_zarr_handle(ome_zarr_filepath, source_layer, 'r')
-#     target_h = get_ome_zarr_handle(ome_zarr_filepath, target_layer, 'a')
-#
-#     if n_threads == 1:
-#
-#         for idx in range(*z_range, downsample_factor):
-#             slice_of_downsampling_layer(
-#                 source_h,
-#                 target_h,
-#                 idx,
-#                 downsample_factor,
-#                 downsample_order=downsample_order,
-#                 verbose=verbose
-#             )
-#     else:
-#
-#         from multiprocessing import Pool
-#         with Pool(processes=n_threads) as p:
-#             tasks = [
-#                 p.apply_async(slice_of_downsampling_layer, (
-#                     source_h,
-#                     target_h,
-#                     idx,
-#                     downsample_factor,
-#                     downsample_order,
-#                     verbose
-#                 ))
-#                 for idx in range(*z_range)
-#             ]
-#             [task.get() for task in tasks]
+    def update_chunk(
+        self,
+        position,
+        shape,
+        source_level=0,
+    ):
+
+        position = np.asarray(position)
+        shape = np.asarray(shape)
+
+        factors = self.store.metadata.downsample_factors
+
+        for level in range(
+            source_level + 1,
+            len(self.store.metadata.levels),
+        ):
+
+            factor = np.asarray(
+                factors[level - 1]
+            )
+
+            #
+            # Expand ROI to valid downsampling region.
+            #
+
+            source_position, source_shape = expand_roi(
+                position,
+                shape,
+                factor,
+            )
+
+            #
+            # Crop to dataset.
+            #
+
+            source_position, source_shape = crop_roi(
+                source_position,
+                source_shape,
+                self.store.shape(level - 1),
+            )
+
+            source = self.store.read(
+                level - 1,
+                source_position,
+                source_shape,
+            )
+
+            target = self.downsample(
+                source,
+                factor,
+            )
+
+            target_position = source_position // factor
+
+            self.store.write(
+                level,
+                target_position,
+                target,
+                update_pyramid=False,
+            )
+
+            position = target_position
+            shape = np.asarray(
+                target.shape
+            )
+
+    # -------------------------------------------------------------------------
+    # Full rebuild
+    # -------------------------------------------------------------------------
+
+    def rebuild(self):
+
+        for level in range(
+            1,
+            len(self.store.metadata.levels),
+        ):
+
+            factor = np.asarray(
+                self.store.metadata.downsample_factors[
+                    level - 1
+                ]
+            )
+
+            source = self.store.dataset(
+                level - 1
+            )[...]
+
+            target = self.downsample(
+                source,
+                factor,
+            )
+
+            self.store.dataset(
+                level
+            )[...] = target
 
 
-def get_scale_of_downsample_level(handle, downsample_level):
-
-    datasets = handle.attrs['multiscales'][0]['datasets']
-    this_dataset = datasets[downsample_level]
-    this_path = this_dataset['path']
-    assert this_path == f's{downsample_level}', \
-        f'Invalid path to downsample level combination: {this_path} != s{downsample_level}'
-
-    return this_dataset['coordinateTransformations'][0]['scale']
+# =============================================================================
+# Main public API
+# =============================================================================
 
 
-def get_unit_of_dataset(handle):
-    units = [x['unit'] for x in handle.attrs['multiscales'][0]['axes']]
-    assert units[0] == units[1] == units[2]
-    return units[0]
+class OMEZarrStore:
 
+    def __init__(
+        self,
+        path,
+        mode="r",
+    ):
 
-def get_downsample_factors(handle):
-    def _get_res_from_dataset(ds):
-        return np.array(ds['coordinateTransformations'][0]['scale'])
-    datasets = handle.attrs['multiscales'][0]['datasets']
+        self.root = open_ome_zarr(
+            path,
+            mode,
+        )
 
-    resolutions = [_get_res_from_dataset(downsampled_dataset) for downsampled_dataset in datasets]
+        self.metadata = OMEZarrMetadata(
+            self.root,
+        )
 
-    scales = []
-    for idx in range(len(resolutions) - 1):
-        resolution = resolutions[idx + 1]
-        ref_resolution = resolutions[idx]
-        this_scale = (resolution / ref_resolution).astype(int).tolist()
-        assert this_scale[0] == this_scale[1] == this_scale[2]
-        this_scale = this_scale[0]
-        scales.append(this_scale)
+        self.pyramid = PyramidBuilder(
+            self,
+        )
 
-    return scales
+    # -------------------------------------------------------------------------
+    # Creation
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def create(
+        path,
+        shape,
+        dtype=np.uint16,
+        chunks=(64, 64, 64),
+        shards=None,
+        downsample_factors=((2, 2, 2),),
+        resolution=(1., 1., 1.),
+        unit="micrometer",
+        downsample_method="Average",
+        ome_version="0.4",
+        zarr_format=2,
+        overwrite=False,
+    ):
+
+        ome_version = validate_ome_version(ome_version)
+        zarr_format = validate_zarr_format(zarr_format)
+
+        import numbers
+        if isinstance(chunks[0], numbers.Number):
+            chunks = [list(chunks)] * (len(downsample_factors) + 1)
+        if len(chunks) != len(downsample_factors) + 1:
+            raise ValueError(f'Number of chunk sizes={len(chunks)} must match downsample factor count + 1={len(downsample_factors) + 1}!')
+
+        if os.path.exists(path):
+            if overwrite:
+                shutil.rmtree(path)
+            else:
+                raise FileExistsError(path)
+
+        root = zarr.open(path, mode="w", zarr_format=zarr_format)
+
+        current_shape = np.asarray(shape)
+
+        for level in range(len(downsample_factors) + 1):
+
+            kwargs = dict(
+                shape=tuple(current_shape),
+                dtype=dtype,
+                chunks=chunks[level],
+                overwrite=True,
+            )
+
+            if zarr_format == 3 and shards is not None:
+                kwargs["shards"] = shards
+
+            root.create_array(f"s{level}", **kwargs)
+
+            if level < len(downsample_factors):
+                current_shape = np.maximum(1, current_shape // np.asarray(downsample_factors[level]))
+
+        OMEZarrMetadata.create(
+            root,
+            downsample_factors=downsample_factors,
+            resolution=resolution,
+            unit=unit,
+            downsample_method=downsample_method,
+            ome_version=ome_version,
+            zarr_format=zarr_format,
+        )
+
+        return OMEZarrStore(path, mode="r+")
+
+    
+    # -------------------------------------------------------------------------
+    # Dataset access
+    # -------------------------------------------------------------------------
+
+    def dataset(self, level):
+
+        return self.root[
+            self.metadata.levels[level]
+        ]
+
+    def shape(self, level):
+
+        return self.dataset(level).shape
+
+    def chunks(self, level):
+
+        ds = self.dataset(level)
+
+        if hasattr(ds, "chunks"):
+            return tuple(ds.chunks)
+
+        return None
+
+    def shards(self, level):
+
+        ds = self.dataset(level)
+
+        if hasattr(ds, "shards"):
+            return ds.shards
+
+        return None
+
+    def get_scale(self, level):
+
+        return self.root.attrs['multiscales'][0]['datasets'][level]['coordinateTransformations'][0]['scale']
+
+    def get_unit(self):
+        units = self.root.attrs['multiscales'][0]['axes']
+        assert units[0] == units[1] == units[2], f'units = {units}'
+        return units[0]
+
+    def get_dtype(self, level):
+        return self.dataset(level).dtype
+
+    # -------------------------------------------------------------------------
+    # Reading
+    # -------------------------------------------------------------------------
+
+    def read(
+        self,
+        level,
+        position,
+        shape,
+    ):
+
+        return self.dataset(level)[
+            make_slice(
+                position,
+                shape,
+            )
+        ]
+
+    # -------------------------------------------------------------------------
+    # Alignment
+    # -------------------------------------------------------------------------
+
+    def check_alignment(
+        self,
+        level,
+        position,
+        shape,
+    ):
+
+        ds = self.dataset(level)
+
+        if not check_grid_alignment(
+            position,
+            shape,
+            self.metadata.storage_grid(ds),
+            ds.shape,
+        ):
+
+            raise ValueError(
+                f"ROI is not aligned to storage grid "
+                f"of level {level}."
+            )
+
+    def check_pyramid_alignment(
+        self,
+        level,
+        position,
+        shape,
+    ):
+
+        position = np.asarray(position)
+        shape = np.asarray(shape)
+
+        for lvl in range(
+            level,
+            len(self.metadata.levels),
+        ):
+
+            self.check_alignment(
+                lvl,
+                position,
+                shape,
+            )
+
+            if lvl < len(
+                self.metadata.downsample_factors
+            ):
+
+                factor = np.asarray(
+                    self.metadata.downsample_factors[
+                        lvl
+                    ]
+                )
+
+                position //= factor
+                shape //= factor
+
+    # -------------------------------------------------------------------------
+    # Writing
+    # -------------------------------------------------------------------------
+
+    def write(
+        self,
+        level,
+        position,
+        data,
+        update_pyramid=False,
+        check_alignment=False,
+        check_pyramid_alignment=False,
+        require_empty=False,
+    ):
+
+        ds = self.dataset(level)
+
+        position = np.asarray(position)
+        shape = np.asarray(data.shape)
+
+        if check_alignment:
+
+            self.check_alignment(
+                level,
+                position.copy(),
+                shape.copy(),
+            )
+
+        if check_pyramid_alignment:
+
+            self.check_pyramid_alignment(
+                level,
+                position.copy(),
+                shape.copy(),
+            )
+
+        sl = make_slice(
+            position,
+            shape,
+        )
+
+        if require_empty:
+
+            if np.any(
+                ds[sl] != 0
+            ):
+
+                raise ValueError(
+                    "Attempting to overwrite existing data."
+                )
+        
+        ds[sl] = data
+
+        if update_pyramid:
+
+            self.update_pyramid(
+                position,
+                shape,
+                source_level=level,
+            )
+
+    # -------------------------------------------------------------------------
+    # Pyramid
+    # -------------------------------------------------------------------------
+
+    def update_pyramid(
+        self,
+        position,
+        shape,
+        source_level=0,
+    ):
+
+        self.pyramid.update_chunk(
+            position,
+            shape,
+            source_level,
+        )
+
+    def rebuild_pyramid(self):
+
+        self.pyramid.rebuild()
 
 
 if __name__ == '__main__':
-    
-    ozh = get_ome_zarr_handle('/media/julian/Data/tmp/amst2_test_4t_3/pre-align-2.ome.zarr', mode='a')
-    shp = ozh.s0.shape
-    downsample_ome_zarr_chunk([16, 0, 0], [16, shp[1], shp[2]], ozh)
+
+    fp = '/media/julian/Data/tmp/create_ome_zarr_test.ome.zarr'
+    store = OMEZarrStore.create(
+        path=fp,
+        dtype='uint8',
+        shape=(256, 256, 256),
+        overwrite=True,
+        ome_version='0.5',
+        zarr_format=3
+    )
+
+
+

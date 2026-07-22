@@ -56,6 +56,8 @@ setup(
             'sq-mobie-init_project = squirrel.mobie:init_mobie_project',
             'sq-mobie-export_rois_with_mobie_table = squirrel.mobie:export_rois_with_mobie_table',
             'sq-napari-view = squirrel.napari:view',
+            'sq-oz-create_ome_zarr = squirrel.ome_zarr:create_ome_zarr',
+            'sq-oz-data_to_ome_zarr = squirrel.ome_zarr:data_to_ome_zarr',
             'sq-serialem-parse_navigator_file = squirrel.serial_em:parse_navigator_file',
             'sq-serialem-create_link_maps = squirrel.serial_em:create_link_maps',
             'sq-stack-axis_median_filter = squirrel.stack_operations:axis_median_filter',

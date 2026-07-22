@@ -112,14 +112,15 @@ def crop_from_stack_workflow(
         write_h5_container(out_path, data)
         return
     if ft_out == 'ome_zarr':
-        from squirrel.library.ome_zarr import create_ome_zarr, get_ome_zarr_handle, chunk_to_ome_zarr
-        create_ome_zarr(
-            filepath=out_path,
+        from squirrel.library.ome_zarr import OMEZarrStore
+        oz = OMEZarrStore.create(
+            path=out_path,
+            dtype=data.dtype,
+            chunks=(256, 256, 256),
             shape=data.shape,
-            dtype=data.dtype
+            shards=None
         )
-        h = get_ome_zarr_handle(out_path, mode='a')
-        chunk_to_ome_zarr(data, [0, 0, 0], h, key='s0', populate_downsample_layers=True)
+        oz.write(0, position=[0, 0, 0], data=data, update_pyramid=True)
         return
     raise ValueError(f'Invalid output type = {ft_out}')
 
@@ -571,15 +572,19 @@ def filter_2d_workflow(
         write_stack(out_path, filtered_stack, key=out_key)
         return
 
-    # assert get_filetype(out_path) == 'dir', 'Batched processing only implemented for tif stack output!'
+    assert get_filetype(out_path) in ['dir', 'ome_zarr'], 'Batched processing only implemented for tif stack output!'
     if get_filetype(out_path) == 'ome_zarr':
         if verbose:
             print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {stack_handle.dtype}')
-        from squirrel.library.ome_zarr import create_ome_zarr
-        create_ome_zarr(
-            filepath=out_path,
+        from squirrel.library.ome_zarr import OMEZarrStore
+        oz = OMEZarrStore.create(
+            path=out_path,
             shape=stack_shape,
-            dtype=stack_handle.dtype
+            dtype=stack_handle.dtype,
+            chunks=(min(int(batch_size / 4), 128), 256, 256), 
+            downsample_factors=(2, 2),
+            shards=None,
+            overwrite=False
         )
 
     def _write_batch(batch, id_offset, out_path):
@@ -589,9 +594,13 @@ def filter_2d_workflow(
             write_tif_stack(batch, out_path, id_offset=id_offset, slice_name='slice_{:05d}.tif')
             return
         if out_filetype == 'ome_zarr':
-            from squirrel.library.ome_zarr import get_ome_zarr_handle, chunk_to_ome_zarr
-            h = get_ome_zarr_handle(out_path, mode='a')
-            chunk_to_ome_zarr(batch, [id_offset, 0, 0], h, key='s0', populate_downsample_layers=True)
+            oz.write(
+                0, [id_offset, 0, 0],
+                data=batch,
+                update_pyramid=True,
+                check_pyramid_alignment=True,
+                require_empty=True
+            )
             return
         raise ValueError(f'Invalid output type = {out_filetype}')
         
@@ -609,8 +618,8 @@ def filter_2d_workflow(
 if __name__ == '__main__':
 
     filter_2d_workflow(
-        '/media/julian/Data/projects/woller/problem-area1/problem_area',
-        '/media/julian/Data/tmp/test_stack_filter',
+        '/media/julian/Data/projects/hennies/amst2-devel/input_data/',
+        '/media/julian/Data/tmp/test_stack_filter.ome.zarr',
         filters=[
             ['gaussian', dict(sigma=5.0)],
             ['gaussian_gradient_magnitude', dict(sigma=1.0)]

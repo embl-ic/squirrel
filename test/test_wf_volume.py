@@ -67,7 +67,7 @@ class TestCropFromStackWorkflow(unittest.TestCase):
                 roi=[1, 3, 1, 4, 5, 3]
             )
 
-            result, _ = load_data_handle(output_dir)
+            result, _ = load_data_handle(output_dir, key=0)
 
             np.testing.assert_array_equal(
                 result[:],

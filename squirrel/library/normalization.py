@@ -91,7 +91,7 @@ def _adjust_greyscale_in_image(
     img = img.astype('float32')
     img -= greys_in[0]
     img /= greys_in[1] - greys_in[0]
-    img *= greys_out[1] - greys_in[0]
+    img *= greys_out[1] - greys_out[0]
     img += greys_out[0]
     img[img < 0] = 0
     img[img > np.iinfo(cast_dtype).max] = np.iinfo(cast_dtype).max

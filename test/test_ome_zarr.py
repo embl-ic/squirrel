@@ -235,6 +235,40 @@ class TestOMEZarr(unittest.TestCase):
             )
         )
 
+    def test_iter_storage_blocks(self):
+
+        blocks = list(
+            self.store.iter_storage_blocks(0)
+        )
+
+        self.assertEqual(
+            len(blocks),
+            64,
+        )
+
+        self.assertEqual(
+            tuple(blocks[0][0]),
+            (0, 0, 0),
+        )
+
+        self.assertEqual(
+            tuple(blocks[-1][0]),
+            (48, 48, 48),
+        )
+    def test_parallel_rebuild(self):
+
+        self.store.dataset(0)[:] = 3
+
+        self.store.rebuild_pyramid(
+            n_threads=4,
+        )
+
+        self.assertTrue(
+            np.all(
+                self.store.dataset(1)[:] == 3
+            )
+        )
+
     # -------------------------------------------------------------------------
     # Alignment
     # -------------------------------------------------------------------------

@@ -1,13 +1,18 @@
 
+import os
+
+
 def create_ome_zarr_workflow(
         filepath,
         shape,
         resolution=(1., 1., 1.),
         unit='pixel',
-        downsample_type='Average',  # One of ['Average', 'Sample']
+        downsample_method='Average',  # One of ['Average', 'Sample']
         downsample_factors=(2, 2, 2),
         chunk_size=(1, 256, 256),
         dtype='uint8',
+        ome_version='0.4',
+        zarr_format=2,
         verbose=False
 ):
 
@@ -20,9 +25,9 @@ def create_ome_zarr_workflow(
         downsample_factors=downsample_factors,
         resolution=resolution,
         unit=unit,
-        downsample_method=downsample_type,
-        ome_version='0.4',
-        zarr_format=2,
+        downsample_method=downsample_method,
+        ome_version=ome_version,
+        zarr_format=zarr_format,
         overwrite=False
     )
 
@@ -33,9 +38,15 @@ def data_to_ome_zarr_workflow(
         position,
         data_key=None,
         data_pattern=None,
-        populate_downsample_layers=False,
+        update_pyramid_mode='data',
+        require_empty=False,
+        check_alignment=False,
+        check_pyramid_alignment=False,
         verbose=False
 ):
+
+    if update_pyramid_mode not in ['data', 'full', 'none']:
+        raise ValueError('Invalid update_pyramid_mode! Possible values: ["data", "full", "none"]')
 
     from squirrel.library.io import load_data_handle
 
@@ -49,11 +60,14 @@ def data_to_ome_zarr_workflow(
     store.write(
         0, position, 
         data=data,
-        update_pyramid=populate_downsample_layers,
-        require_empty=True,
-        check_alignment=False,
-        check_pyramid_alignment=False
+        update_pyramid=(update_pyramid_mode == 'data'),
+        require_empty=require_empty,
+        check_alignment=check_alignment,
+        check_pyramid_alignment=check_pyramid_alignment
     )
+
+    if update_pyramid_mode == 'full':
+        store.rebuild_pyramid(n_threads=os.cpu_count())
 
 
 if __name__ == '__main__':

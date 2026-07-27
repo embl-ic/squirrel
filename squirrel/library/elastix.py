@@ -1432,7 +1432,7 @@ class ElastixMultiStepStack:
         from squirrel.library.io import load_data_handle
         if type(image_stack_h) == str:
             h, shape = load_data_handle(image_stack_h, key, pattern)
-            z_range = norm_z_range(z_range, len(h))
+            z_range = norm_z_range(z_range, shape[0])
             dtype = h.dtype
         else:
             z_range = norm_z_range(z_range, len(image_stack_h))

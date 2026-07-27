@@ -104,11 +104,6 @@ def get_file_list(path, pattern='*'):
     return sorted(glob(os.path.join(path, pattern)))
 
 
-# NOTE: Deprecated
-# def load_tif_stack(path, pattern='*'):
-#     return [read_tif_slice(filepath, return_filepath=False) for filepath in get_file_list(path, pattern)]
-
-
 def write_nii_file(data, filepath, scale=None):
     # FIXME add tests
     import nibabel as nib
@@ -367,14 +362,19 @@ def write_stack(path, data, key='data', id_offset=0):
         return
     if filetype == 'ome_zarr':
         from squirrel.library.ome_zarr import OMEZarrStore
+        print(f'Creating ome-zarr ...')
         oz = OMEZarrStore.create(
             path=path,
             dtype=data.dtype,
             chunks=(128, 128, 128),
+            downsample_factors=(2, 2),
             shape=data.shape,
             shards=None
         )
-        oz.write(0, position=[0, 0, 0], data=data, update_pyramid=True)
+        print('Writing data ...')
+        oz.write(0, position=[0, 0, 0], data=data, update_pyramid=False)
+        print('Building pyramid ...')
+        oz.rebuild_pyramid(n_threads=os.cpu_count())
         return
     raise ValueError(f'Invalid filetype={filetype} of target path={path}')
 

@@ -747,16 +747,51 @@ class OMEZarrStore:
 
 if __name__ == '__main__':
 
+    # Example1: Create and write to an ome-zarr
+    # Create an empty ome-zarr
     fp = '/media/julian/Data/tmp/create_ome_zarr_test.ome.zarr'
-    store = OMEZarrStore.create(
+    oz = OMEZarrStore.create(
         path=fp,
         dtype='uint8',
         shape=(256, 256, 256),
         overwrite=True,
         ome_version='0.5',
-        zarr_format=3
+        zarr_format=3,
+        shards=(128, 128, 128)
     )
-    store.get_unit()
+    # Fill it with data
+    oz.write(
+        level=0,
+        data=np.ones((256, 256, 256)) * 255,
+        position=(0, 0, 0),
+        update_pyramid=True
+    ) 
 
+    # Example2: Write to an exisiting ome-zarr in multiple write events (e.g. sitting in different nextflow jobs)
+    #    Note: the following write events can be done in parallel as they write one shard each
 
+    # --- write event 1 ---
+    oz = OMEZarrStore(fp, mode='a')
+    oz.write(
+        level=0,
+        data=np.ones((128, 128, 128)) * 255,
+        position=(0, 0, 0),
+        check_alignment=True,  # Make sure that the written data fits the storage grid (chunks for version2, shards for version3)
+        check_pyramid_alignment=False,  # This would ensure that the written data fits the storage grid through the entire pyramid (not nessesary if not computing the pyramid directly)
+        update_pyramid=False
+    )
+
+    # --- write event 2 ---
+    oz = OMEZarrStore(fp, mode='a')
+    oz.write(
+        level=0,
+        data=np.ones((128, 128, 128)) * 255,
+        position=(128, 0, 0),
+        check_alignment=True, 
+        check_pyramid_alignment=False,
+        update_pyramid=False
+    )
+
+    # --- Finalizing the ome-zarr (after all writing is completed) ---
+    oz.rebuild_pyramid(n_threads=os.cpu_count())
 

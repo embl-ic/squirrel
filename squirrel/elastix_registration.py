@@ -702,7 +702,7 @@ def get_elastix_transforms_substack():
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument('transform_stack', type=str,
-                        help='Input filepath for the elastix transform stack (h5 file)')
+                        help='Input filepath for the elastix transform stack')
     parser.add_argument('out_dirpath', type=str,
                         help='Output directory path for the result files')
     parser.add_argument('--z_range', type=int, nargs=2, default=None,

@@ -7,7 +7,7 @@ import shutil
 
 import numpy as np
 import zarr
-
+from itertools import product
 
 # =============================================================================
 # Helper functions
@@ -499,13 +499,11 @@ class PyramidBuilder:
             first = (target_position // grid) * grid
             last = ((target_position + target_shape - 1) // grid) * grid
 
-            for z in range(first[0], last[0] + 1, grid[0]):
-                for y in range(first[1], last[1] + 1, grid[1]):
-                    for x in range(first[2], last[2] + 1, grid[2]):
-
-                        p = np.array((z, y, x))
-                        s = np.minimum(grid, np.asarray(self.store.shape(level)) - p)
-                        self._process_block(level, p, s)
+            ranges = [range(f, l + 1, g) for f, l, g in zip(first, last, grid)]
+            for idx in product(*ranges):
+                p = np.array(idx)
+                s = np.minimum(grid, np.asarray(self.store.shape(level)) - p)
+                self._process_block(level, p, s)
 
             position = target_position
             shape = target_shape
@@ -736,13 +734,10 @@ class OMEZarrStore:
 
         starts = [range(0, s, g) for s, g in zip(shape, grid)]
 
-        for z in starts[0]:
-            for y in starts[1]:
-                for x in starts[2]:
-
-                    position = np.array((z, y, x))
-                    block_shape = np.minimum(grid, shape - position)
-                    yield (position, block_shape)
+        for idx in product(*starts):
+            position = np.array(idx)
+            block_shape = np.minimum(grid, shape - position)
+            yield (position, block_shape)
 
 
 if __name__ == '__main__':

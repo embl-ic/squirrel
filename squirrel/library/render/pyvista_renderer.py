@@ -11,6 +11,7 @@ class PyVistaRenderer:
         self,
         off_screen=False,
         image_size=(800, 800),
+        world_scale=1.0
     ):
 
         self.plotter = pv.Plotter(
@@ -18,16 +19,28 @@ class PyVistaRenderer:
             window_size=image_size,
         )
 
+        self.world_scale = world_scale
+
     # Output
     def show(self, scene):
 
         self._load_scene(scene)
 
-        self.plotter.camera.AddObserver(
-            "ModifiedEvent",
-            lambda *_:
-                self._camera_callback(scene)
-        )
+        # # This is too expensive
+        # self.plotter.camera.AddObserver(
+        #     "ModifiedEvent",
+        #     lambda *_: self._camera_callback(scene)
+        # )
+
+        def print_camera():
+            cam = self.plotter.camera
+            print([
+                tuple(cam.position),
+                tuple(cam.focal_point),
+                tuple(cam.up),
+            ])
+
+        self.plotter.add_key_event("c", print_camera)
 
         self.plotter.show()
 
@@ -67,8 +80,11 @@ class PyVistaRenderer:
         #     show_scalar_bar=False,
         # )
 
+        mesh = obj.mesh.copy()
+        mesh.points *= self.world_scale
+
         self.plotter.add_mesh(
-            obj.mesh,
+            mesh,
             scalars="view_normal",
             cmap=cmap,
             smooth_shading=True,
@@ -138,6 +154,17 @@ class PyVistaRenderer:
 
         self.plotter.render()
 
+    def _scale_camera(self, camera_position):
+
+        if camera_position is None:
+            return None
+
+        return [
+            tuple(np.array(camera_position[0]) * self.world_scale),
+            tuple(np.array(camera_position[1]) * self.world_scale),
+            camera_position[2],
+        ]
+
     def _load_scene(self, scene):
 
         self.plotter.set_background(
@@ -153,5 +180,5 @@ class PyVistaRenderer:
 
         if scene.camera_position is not None:
             self.plotter.camera_position = (
-                scene.camera_position
-            )
+                self._scale_camera(scene.camera_position)
+            )   

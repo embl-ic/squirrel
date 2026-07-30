@@ -694,21 +694,6 @@ class Scene:
 
         return self
 
-    def set_lighting(self):
-        pass
-        # import pyvista as pv
-
-        # # Loading a background
-        # from pyvista import examples
-        # cubemap = examples.download_sky_box_cube_map()
-        # self.plotter.set_environment_texture(cubemap)
-        # # Custom lights
-        # self.plotter.remove_all_lights()
-        # light = pv.Light(position=(0, 15000, 0), focal_point=(2500, 2560, 2600), color='white', intensity=3.5)
-        # self.plotter.add_light(light) 
-        # self.plotter.enable_shadows()
-        # self.plotter.enable_ssao()
-
     def set_anti_aliasing(self, enabled=True):
 
         self.anti_aliasing = enabled
@@ -816,12 +801,23 @@ if __name__ == '__main__':
     scene.set_anti_aliasing()
 
     scene.set_camera([
-        (3600, 15000, 1000),
-        (2500, 2560, 2600),
+        (2900, 12800, 1300),
+        (2000, 2600, 2600),
         (0, 0, 1),
     ])
 
-    # scene.show()
-    from squirrel.library.render.pyvista_renderer import PyVistaRenderer
-    renderer = PyVistaRenderer(off_screen=True, image_size=(4000, 3000))
-    renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
+    # # Pyvista rendering
+    # from squirrel.library.render.pyvista_renderer import PyVistaRenderer
+    # renderer = PyVistaRenderer(off_screen=True, image_size=(3000, 3000), world_scale=0.001)
+    # renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
+    # # renderer.show(scene)
+
+    # Blender rendering
+    from squirrel.library.render.blender_renderer import BlenderRenderer
+    renderer = BlenderRenderer(
+        samples=128,
+        output_size=(3000, 3000),
+        world_scale=0.001
+    )
+    renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
+    # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

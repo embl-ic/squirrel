@@ -70,6 +70,16 @@ mamba install -c conda-forge pandas
 pip install pyvsnr
 ```
 
+## Specific installations
+
+### PyVista
+
+```bash 
+mamba create -n pyvista-squirrel-env -c conda-forge --override-channels python=3.11 "numpy<2.3" vigra pyvista tol-colors
+conda activate pyvista-squirrel-env
+pip install squirrel
+```
+
 ## Usage
 
 The main functions can be used directly after activation of the 

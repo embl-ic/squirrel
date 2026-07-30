@@ -655,20 +655,19 @@ class EMVolume:
 
 
 class Scene:
-    """Owns the PyVista plotter and rendering."""
 
-    def __init__(self, off_screen=False, image_size=(800, 800)):
-        import pyvista as pv
-        self.plotter = pv.Plotter(off_screen=off_screen, window_size=image_size)
+    def __init__(self):
         self.objects = []
+
+        self.background = "black"
+        self.camera_position = None
+        self.anti_aliasing = True
 
     # Add data
     def add_object(self, obj):
         """Add a SegmentObject to the scene."""
 
         self.objects.append(obj)
-        self._apply_colors(obj)
-
         return self
 
     def add_segmentation(self, segmentation):
@@ -683,12 +682,16 @@ class Scene:
     def update_colors(self):
         pass
 
-    def set_background(self, color="black"):
-        self.plotter.set_background(color)
+    def set_background(self, color):
+
+        self.background = color
+
         return self
 
     def set_camera(self, camera_position):
-        self.plotter.camera_position = camera_position
+
+        self.camera_position = camera_position
+
         return self
 
     def set_lighting(self):
@@ -706,117 +709,11 @@ class Scene:
         # self.plotter.enable_shadows()
         # self.plotter.enable_ssao()
 
-    def set_anti_aliasing(self):
-        self.plotter.enable_anti_aliasing()
+    def set_anti_aliasing(self, enabled=True):
+
+        self.anti_aliasing = enabled
+
         return self
-
-    # Output
-    def show(self):
-
-        self.plotter.camera.AddObserver(
-            "ModifiedEvent",
-            self._camera_callback,
-        )
-
-        self.plotter.show()
-
-    def screenshot(self, filename):
-        self.plotter.show(
-            screenshot=filename,
-            auto_close=True,
-        )
-
-    # Internal helpers
-    def _apply_colors(self, obj):
-
-        cmap = make_colormap(
-            base_color=obj.color,
-            hue_shift=np.abs(obj.hue_shift),
-            lightness_shift=obj.lightness_shift,
-            saturation_shift=0,
-        )
-
-        self._update_view_normals(obj)
-
-        # self.plotter.add_mesh(
-        #     obj.mesh,
-        #     scalars="view_normal",
-        #     cmap=cmap,
-        #     smooth_shading=True,
-        #     pbr=True,
-        #     metallic=0.1,
-        #     roughness=0.9,
-        #     ambient=0.5,
-        #     diffuse=0.5,
-        #     show_scalar_bar=False,
-        # )
-
-        self.plotter.add_mesh(
-            obj.mesh,
-            scalars="view_normal",
-            cmap=cmap,
-            smooth_shading=True,
-            ambient=0.2,
-            diffuse=0.8,
-            specular=0.2,
-            specular_power=20,
-            show_scalar_bar=False
-        )
-
-    def _update_view_normals(self, obj):
-
-        mesh = obj.mesh
-
-        normals = mesh.point_normals
-        points = mesh.points
-
-        camera = np.asarray(self.plotter.camera.position)
-        view_up = np.asarray(self.plotter.camera.up)
-
-        view_dir = camera - points
-        view_dir /= np.linalg.norm(
-            view_dir,
-            axis=1,
-            keepdims=True,
-        )
-
-        if obj.normal_mode == "front_silhouette":
-
-            nv = np.abs(
-                np.sum(normals * view_dir, axis=1)
-            )
-
-            view_normal = 1.0 - 2.0 * nv
-
-        elif obj.normal_mode == "left_right":
-
-            right = np.cross(view_dir[0], view_up)
-            right /= np.linalg.norm(right)
-
-            nv = normals @ right
-
-            rim_strength = 2.0
-
-            view_normal = np.sign(nv) * (
-                np.abs(nv) ** rim_strength
-            )
-
-        else:
-            raise ValueError(
-                f"Invalid normal mode: {obj.normal_mode}"
-            )
-
-        mesh["view_normal"] = (
-            np.sign(obj.hue_shift)
-            * np.clip(view_normal, -1, 1)
-        )
-
-    def _camera_callback(self, caller, event):
-
-        for obj in self.objects:
-            self._update_view_normals(obj)
-
-        self.plotter.render()
 
 
 if __name__ == '__main__':
@@ -847,7 +744,7 @@ if __name__ == '__main__':
     # ------------------------------------------------------------------
     # Create objects and scene
 
-    scene = Scene(off_screen=True, image_size=(4000, 3000))
+    scene = Scene()
 
     # # Manual version
     # for idx, obj in enumerate(segmentation):
@@ -925,4 +822,6 @@ if __name__ == '__main__':
     ])
 
     # scene.show()
-    scene.screenshot(os.path.join(out_dir, 'scene.png'))
+    from squirrel.library.render.pyvista_renderer import PyVistaRenderer
+    renderer = PyVistaRenderer(off_screen=True, image_size=(4000, 3000))
+    renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))

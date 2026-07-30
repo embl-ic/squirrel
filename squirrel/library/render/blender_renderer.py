@@ -42,53 +42,47 @@ class BlenderRenderer(Renderer):
         filename,
     ):
 
+        filename = Path(filename)
+        blend_file = filename.with_suffix(".blend")
+
+        self.write_blend(
+            scene,
+            blend_file,
+        )
+
+        self.render_blend(
+            blend_file,
+            filename,
+        )
+
+    def render_blend(
+        self,
+        blend_file,
+        output_file,
+    ):
+
         with tempfile.TemporaryDirectory() as tmp:
 
             tmp = Path(tmp)
 
-            export_dir = tmp / "meshes"
-            export_dir.mkdir()
-
-            scene_file = tmp / "scene.json"
-
-            data = self._export_scene(
-                scene,
-                export_dir,
-            )
-
-            scene_file.write_text(
-                json.dumps(data, indent=2)
-            )
-
             script = tmp / "render.py"
 
             script.write_text(
-                self._blender_script()
+                self._render_script()
             )
 
             cmd = [
-                "stdbuf",
-                "-oL",
                 self.blender_executable,
-            ]
-
-            if self.template:
-                cmd.append(self.template)
-
-            cmd += [
+                str(blend_file),
                 "--background",
                 "--python",
                 str(script),
                 "--",
-                str(scene_file),
-                str(filename),
+                str(output_file),
                 str(self.output_size[0]),
                 str(self.output_size[1]),
                 str(self.samples),
-                "render",
             ]
-
-            import subprocess
 
             process = subprocess.run(
                 cmd,
@@ -96,9 +90,16 @@ class BlenderRenderer(Renderer):
                 capture_output=True,
             )
 
+            print("========== STDOUT ==========")
             print(process.stdout)
+
+            print("========== STDERR ==========")
             print(process.stderr)
-            print(process.returncode)
+
+            if process.returncode != 0:
+                raise RuntimeError(
+                    f"Blender failed with exit code {process.returncode}"
+                )
 
     def _export_scene(
         self,
@@ -174,7 +175,7 @@ class BlenderRenderer(Renderer):
             },
         }
 
-    def _blender_script(self, save_only=False):
+    def _build_scene_script(self):
 
         return r'''
 import bpy
@@ -182,7 +183,6 @@ import sys
 import json
 import math
 import mathutils
-
 
 # -------------------------------------------------
 # arguments
@@ -196,12 +196,9 @@ argv = argv[
 
 scene_json = argv[0]
 output = argv[1]
-
-width = int(argv[2])
-height = int(argv[3])
-samples = int(argv[4])
-mode = argv[5]
-save_only = (mode == "save")
+# width = int(argv[2])
+# height = int(argv[3])
+# samples = int(argv[4])
 
 # -------------------------------------------------
 # clean scene
@@ -273,10 +270,6 @@ for obj in data["objects"]:
     )
 
     mesh_obj.data.materials.append(mat)
-
-# -------------------------------------------------
-# camera
-# -------------------------------------------------
 
 # -------------------------------------------------
 # camera
@@ -369,8 +362,33 @@ light.rotation_euler = (
 )
 
 # -------------------------------------------------
-# renderer settings
+# render
 # -------------------------------------------------
+
+scene = bpy.context.scene
+scene.render.engine = "CYCLES"
+
+# scene.render.resolution_x = width
+# scene.render.resolution_y = height
+# scene.cycles.samples = samples
+
+bpy.ops.wm.save_as_mainfile(
+    filepath=output
+)
+'''
+
+    def _render_script(self):
+
+        return r'''
+import bpy
+import sys
+
+argv = sys.argv[sys.argv.index("--")+1:]
+
+output = argv[0]
+width = int(argv[1])
+height = int(argv[2])
+samples = int(argv[3])
 
 scene = bpy.context.scene
 
@@ -379,45 +397,20 @@ scene.render.engine = "CYCLES"
 scene.cycles.samples = samples
 scene.cycles.use_denoising = True
 
-# scene.render.engine = "BLENDER_EEVEE"
-
 scene.render.resolution_x = width
 scene.render.resolution_y = height
 scene.render.resolution_percentage = 100
 
-# Color handling
-# scene.view_settings.look = "AgX - Medium High Contrast"
-# scene.view_settings.exposure = 3.0
 scene.view_settings.look = "AgX - High Contrast"
 scene.view_settings.exposure = 2.2
 scene.view_settings.gamma = 0.9
 
-# Sampling
-if scene.render.engine == "BLENDER_EEVEE":
-    scene.eevee.taa_render_samples = samples
-
-
-# Transparent background disabled
 scene.render.film_transparent = True
-
 
 scene.render.filepath = output
 
-
-# -------------------------------------------------
-# render
-# -------------------------------------------------
-
-if save_only:
-
-    bpy.ops.wm.save_as_mainfile(
-        filepath=output
-    )
-
-else:
-
-    bpy.ops.render.render(
-        write_still=True
+bpy.ops.render.render(
+    write_still=True
 )
 '''
 
@@ -454,7 +447,7 @@ else:
             script = tmp / "render.py"
 
             script.write_text(
-                self._blender_script(save_only=True)
+                self._build_scene_script()
             )
 
             cmd = [
@@ -471,13 +464,7 @@ else:
                 "--",
                 str(scene_file),
                 str(filename),
-                str(self.output_size[0]),
-                str(self.output_size[1]),
-                str(self.samples),
-                "save",
             ]
-
-            import subprocess
 
             process = subprocess.run(
                 cmd,
@@ -485,7 +472,14 @@ else:
                 capture_output=True,
             )
 
+            print("========== STDOUT ==========")
             print(process.stdout)
+
+            print("========== STDERR ==========")
             print(process.stderr)
-            print(process.returncode)
+
+            if process.returncode != 0:
+                raise RuntimeError(
+                    f"Blender failed with exit code {process.returncode}"
+                )
             

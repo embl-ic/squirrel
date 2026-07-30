@@ -816,7 +816,7 @@ if __name__ == '__main__':
     from squirrel.library.render.blender_renderer import BlenderRenderer
     renderer = BlenderRenderer(
         samples=128,
-        output_size=(3000, 3000),
+        output_size=(1000, 1000),
         world_scale=0.001
     )
     renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))

@@ -290,9 +290,8 @@ def stack_to_ome_zarr_workflow(
         chunk_position = (z_range[0], 0, 0)
 
     else:
-
-        chunk_data = input_stack_handle[
-            z_range[0]:z_range[1],
+        chunk_data = input_stack_handle[z_range[0]:z_range[1]][
+            :,
             xy_range[1]:xy_range[1] + xy_range[3],
             xy_range[0]:xy_range[0] + xy_range[2],
         ]

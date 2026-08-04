@@ -589,24 +589,25 @@ def dot_product_on_affines_workflow(
     from ..library.affine_matrices import AffineStack
 
     transforms = [
-        AffineStack(filepath=transform_filepaths[0]),
-        AffineStack(filepath=transform_filepaths[1])
+        AffineStack.read(transform_filepaths[0]),
+        AffineStack.read(transform_filepaths[1])
     ]
-    if transforms[0].is_sequenced or transforms[1].is_sequenced:
-        if not transforms[0].is_sequenced:
-            transforms[0] = transforms[0].get_sequenced_stack()
-        if not transforms[1].is_sequenced:
-            transforms[1] = transforms[1].get_sequenced_stack()
+
+    if transforms[0].sequenced or transforms[1].sequenced:
+        if not transforms[0].sequenced:
+            transforms[0] = transforms[0].to_sequenced()
+        if not transforms[1].sequenced:
+            transforms[1] = transforms[1].to_sequenced()
 
     if inverse[0]:
-        transforms[0] = -transforms[0]
+        transforms[0] = transforms[0].inverse()
     if inverse[1]:
-        transforms[1] = -transforms[1]
-    out_transforms = transforms[0] * transforms[1]
+        transforms[1] = transforms[1].inverse()
+    out_transforms = transforms[0] @ transforms[1]
     if keep_meta is not None:
-        out_transforms.set_meta(data=transforms[keep_meta].get_meta())
+        out_transforms.set_metadata(data=transforms[keep_meta].get_metadata())
 
-    out_transforms.to_file(out_filepath)
+    out_transforms.write(out_filepath)
 
 
 def scale_sequential_affines_workflow(
@@ -826,26 +827,22 @@ def apply_auto_pad_workflow(
         print(f'transform_filepath = {transform_filepath}')
         print(f'out_filepath = {out_filepath}')
 
-    from squirrel.library.image import apply_auto_pad
     from squirrel.library.affine_matrices import AffineStack
 
-    transforms = AffineStack(filepath=transform_filepath)
-    if not transforms.is_sequenced:
-        transforms = transforms.get_sequenced_stack()
-    if not transforms.exists_meta('bounds'):
-        from squirrel.library.image import get_bounds_of_stack, apply_auto_pad
+    transforms = AffineStack.read(transform_filepath)
+    if not transforms.sequenced:
+        transforms = transforms.to_sequenced()
+    if not transforms.has_metadata('bounds'):
+        from squirrel.library.image import get_bounds_of_stack 
         from squirrel.library.io import load_data_handle
         assert image_stack_path is not None, 'A stack needs to be supplied if no bounds information is found in the transformation meta data'
         stack_h, stack_shape = load_data_handle(image_stack_path, key=key, pattern=pattern)
         stack_bounds = get_bounds_of_stack(stack_h, stack_shape, return_ints=True, z_range=None)
     else:
-        stack_bounds = transforms.get_meta('bounds')
+        stack_bounds = transforms.get_metadata('bounds')
 
-    transforms, stack_shape = apply_auto_pad(
-        transforms, [len(transforms), 0, 0], stack_bounds, extra_padding=16
-    )
-    transforms.set_meta('stack_shape', stack_shape)
-    transforms.to_file(out_filepath)
+    transforms.auto_pad(stack_bounds, extra_padding=16)
+    transforms.write(out_filepath)
 
 
 def crop_transform_sequence_workflow(transform_filepath, out_filepath, z_range, verbose=False):

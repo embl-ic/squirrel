@@ -28,53 +28,53 @@ def get_bounds_of_stack(stack_h, stack_shape, return_ints=False, z_range=None):
     ]
 
 
-def apply_auto_pad(transforms, stack_shape, stack_bounds, extra_padding=0):
+# def apply_auto_pad(transforms, stack_shape, stack_bounds, extra_padding=0):
 
-    def _transform_on_bounds(t, b):
+#     def _transform_on_bounds(t, b):
 
-        t_ = t.astype('float64')
+#         t_ = t.astype('float64')
 
-        min_yx = [b[0], b[1]]
-        min_y_max_x = [b[0], b[3]]
-        max_y_min_x = [b[2], b[1]]
-        max_yx = [b[2], b[3]]
+#         min_yx = [b[0], b[1]]
+#         min_y_max_x = [b[0], b[3]]
+#         max_y_min_x = [b[2], b[1]]
+#         max_yx = [b[2], b[3]]
 
-        t_min_yx = np.matmul(np.linalg.inv(t_), min_yx + [1.])
-        t_min_y_max_x = np.matmul(np.linalg.inv(t_), min_y_max_x + [1.])
-        t_max_y_min_x = np.matmul(np.linalg.inv(t_), max_y_min_x + [1.])
-        t_max_yx = np.matmul(np.linalg.inv(t_), max_yx + [1.])
+#         t_min_yx = np.matmul(np.linalg.inv(t_), min_yx + [1.])
+#         t_min_y_max_x = np.matmul(np.linalg.inv(t_), min_y_max_x + [1.])
+#         t_max_y_min_x = np.matmul(np.linalg.inv(t_), max_y_min_x + [1.])
+#         t_max_yx = np.matmul(np.linalg.inv(t_), max_yx + [1.])
 
-        new_b = np.array([
-            np.min([t_min_yx, t_min_y_max_x, t_max_y_min_x, t_max_yx], axis=0),
-            np.max([t_min_yx, t_min_y_max_x, t_max_y_min_x, t_max_yx], axis=0)
-        ])[:, :2]
+#         new_b = np.array([
+#             np.min([t_min_yx, t_min_y_max_x, t_max_y_min_x, t_max_yx], axis=0),
+#             np.max([t_min_yx, t_min_y_max_x, t_max_y_min_x, t_max_yx], axis=0)
+#         ])[:, :2]
 
-        return new_b
+#         return new_b
 
-    new_bounds = np.array([
-        _transform_on_bounds(matrix.get_matrix('Ms'), stack_bounds[idx])
-        for idx, matrix in enumerate(transforms)
-    ])
+#     new_bounds = np.array([
+#         _transform_on_bounds(matrix.get_matrix('Ms'), stack_bounds[idx])
+#         for idx, matrix in enumerate(transforms)
+#     ])
 
-    new_bounds = [
-        np.min(new_bounds[:, 0], axis=0),
-        np.max(new_bounds[:, 1], axis=0)
-    ]
+#     new_bounds = [
+#         np.min(new_bounds[:, 0], axis=0),
+#         np.max(new_bounds[:, 1], axis=0)
+#     ]
 
-    # Modify the offsets within the transforms to move everything towards the origin
-    from ..library.affine_matrices import AffineMatrix
-    from ..library.transformation import setup_translation_matrix
-    new_transforms = []
-    for matrix in transforms:
-        new_transforms.append(
-            matrix * AffineMatrix(parameters=setup_translation_matrix(new_bounds[0] - extra_padding, ndim=2).flatten())
-        )
-    transforms.update_stack(new_transforms)
+#     # Modify the offsets within the transforms to move everything towards the origin
+#     from ..library.affine_matrices import AffineMatrix
+#     from ..library.transformation import setup_translation_matrix
+#     new_transforms = []
+#     for matrix in transforms:
+#         new_transforms.append(
+#             matrix * AffineMatrix(parameters=setup_translation_matrix(new_bounds[0] - extra_padding, ndim=2).flatten())
+#         )
+#     transforms.update_stack(new_transforms)
 
-    # Also modify the stack_shape now to crop or extend the images
-    stack_shape[1:] = (new_bounds[1] - new_bounds[0] + 2 * extra_padding).astype(int).tolist()
+#     # Also modify the stack_shape now to crop or extend the images
+#     stack_shape[1:] = (new_bounds[1] - new_bounds[0] + 2 * extra_padding).astype(int).tolist()
 
-    return transforms, stack_shape
+#     return transforms, stack_shape
 
 
 def assert_equal_shape(im1, im2):

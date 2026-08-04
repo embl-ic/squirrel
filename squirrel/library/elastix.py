@@ -827,7 +827,7 @@ def register_with_elastix(
         if kwargs is None:
             kwargs = {}
         from squirrel.library.affine_matrices import AffineMatrix
-        offsets = AffineMatrix(translation=[0.] * fixed.ndim)
+        offsets = AffineMatrix.from_translation([0.] * fixed.ndim)
         if initialize_offsets_method is not None and initialize_offsets_method != 'none':
             assert type(fixed) == np.ndarray
             assert type(moving) == np.ndarray
@@ -873,17 +873,17 @@ def register_with_elastix(
         pivot += bounds_offset
 
         from squirrel.library.affine_matrices import AffineMatrix
-        result_matrix = AffineMatrix(
-            elastix_parameters=[transform, [float(x) for x in result_transform_parameters]]
+        result_matrix = AffineMatrix.from_elastix(
+            [transform, [float(x) for x in result_transform_parameters]]
         )
-        result_matrix = result_matrix * pre_fix_offsets
-        result_matrix.set_pivot(pivot)
+        result_matrix = result_matrix @ pre_fix_offsets
+        result_matrix = result_matrix.with_pivot(pivot)
 
         if params_to_origin:
             if verbose:
                 print(f'shifting params to origin')
-                print(f'result_matrix.get_pivot() = {result_matrix.get_pivot()}')
-            result_matrix.shift_pivot_to_origin()
+                print(f'result_matrix.pivot = {result_matrix.pivot}')
+            result_matrix = result_matrix.shifted_pivot_to_origin()
         return result_matrix
 
     def _debug_step(fixed, moving, name):
@@ -949,7 +949,7 @@ def register_with_elastix(
 
     # Shift the moving image and it's mask
     print('Applying initialization ...')
-    if not all(pre_fix_offsets.get_translation() == 0):
+    if not all(pre_fix_offsets.translation == 0):
         moving_image = apply_transforms_on_image(moving_image, [pre_fix_offsets])
         if moving_mask is not None:
             moving_mask = apply_transforms_on_image(moving_mask, [pre_fix_offsets])
@@ -1286,7 +1286,7 @@ class ElastixStack:
         from squirrel.library.affine_matrices import AffineStack
         if isinstance(stack, AffineStack):
             self._stack = [
-                x.to_elastix_affine(return_parameter_map=True, shape=image_shape) for x in stack
+                x.to_elastix(as_parameter_map=True, shape=image_shape) for x in stack
             ]
             return
         raise ValueError(f'Invalid transform stack type: {type(stack)}')

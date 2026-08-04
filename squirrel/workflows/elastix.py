@@ -432,8 +432,8 @@ def elastix_stack_alignment_workflow(
     from squirrel.library.data import norm_z_range
 
     stack, stack_size = load_data_handle(stack, key=key, pattern=pattern)
+    transforms = AffineStack(sequenced=False)
 
-    transforms = AffineStack(is_sequenced=False, pivot=[0., 0.])
     bounds = []
 
     z_range = norm_z_range(z_range, stack_size[0])
@@ -529,15 +529,16 @@ def elastix_stack_alignment_workflow(
         transforms.large_offsets_to_zero(max_offset_distance)
 
     if z_step > 1:
-        transforms.set_meta('z_step', z_step)
+        transforms.set_metadata('z_step', z_step)
         if apply_z_step:
-            transforms = transforms.get_sequenced_stack()
+            if not transforms.sequenced:
+                transforms = transforms.to_sequenced()
             transforms = transforms.apply_z_step()
 
     if determine_bounds:
         assert len(transforms) == len(bounds)
-        transforms.set_meta('bounds', np.array(bounds))
-    transforms.to_file(out_filepath)
+        transforms.set_metadata('bounds', np.array(bounds))
+    transforms.write(out_filepath)
 
 
 def stack_alignment_validation_workflow(
@@ -867,19 +868,29 @@ def apply_multi_step_stack_alignment_workflow(
                 stack = ElastixStack(stack=stack[start_transform_id: start_transform_id + z_range[1] - z_range[0]])
             stacks.append(stack)
         else:
-            stack = AffineStack(filepath=transform_path)
+            stack = AffineStack.read(transform_path)
+
             if z_range is not None:
-                stack = stack.new_stack_with_same_meta(stack[start_transform_id: start_transform_id + z_range[1] - z_range[0]])
-            if stack.exists_meta('stack_shape'):
-                image_shape = stack.get_meta('stack_shape')[1:]
+                stack = stack[
+                    start_transform_id:
+                    start_transform_id + z_range[1] - z_range[0]
+                ]
+
+            if stack.has_metadata("stack_shape"):
+                image_shape = stack.get_metadata("stack_shape")[1:]
                 target_image_shape = image_shape
-                print(f'found image_shape = {image_shape}')
+                print(f"found image_shape = {image_shape}")
             else:
                 image_shape = target_image_shape
-            if not stack.is_sequenced:
+
+            if not stack.sequenced:
                 if assert_sequenced:
-                    raise AssertionError(f'Transformation stack is not sequenced: {transform_path}')
-                stack = stack.get_sequenced_stack()
+                    raise AssertionError(
+                        f"Transformation stack is not sequenced: {transform_path}"
+                    )
+
+                stack = stack.to_sequenced()
+
             stacks.append(ElastixStack(stack=stack, image_shape=image_shape))
 
     if verbose:

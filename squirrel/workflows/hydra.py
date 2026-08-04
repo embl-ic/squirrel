@@ -23,7 +23,7 @@ def get_acquisition_transforms_workflow(dirpath: str, out_filepath: str = None, 
     transforms, _ = transforms.auto_pad(extra_padding=16)
 
     if out_filepath is not None:
-        transforms.to_file(out_filepath)
+        transforms.write(out_filepath)
 
     return transforms
 

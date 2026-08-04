@@ -414,7 +414,7 @@ class AffineStack:
             metadata=metadata,
         )
 
-    def apply_z_step(self):
+    def apply_z_step(self, max_length=None):
         """
         Expand a sequenced stack according to the metadata entry ``z_step``.
 
@@ -449,6 +449,8 @@ class AffineStack:
                 for parameter_sequence in parameters.T
             ], axis=1,
         )
+        if len is not None:
+            interpolated_parameters = interpolated_parameters[:max_length]
 
         result = AffineStack.from_array(
             interpolated_parameters.astype(self.dtype),

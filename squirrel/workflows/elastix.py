@@ -533,7 +533,7 @@ def elastix_stack_alignment_workflow(
         if apply_z_step:
             if not transforms.sequenced:
                 transforms = transforms.to_sequenced()
-            transforms = transforms.apply_z_step(max_length=z_range[1] - z_range[0])
+            transforms = transforms.apply_z_step(max_length=z_range[1] - z_range[0])  # max_length=z_range[1] - z_range[0])
 
     if determine_bounds:
         assert len(transforms) == len(bounds)

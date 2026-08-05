@@ -449,7 +449,8 @@ class AffineStack:
                 for parameter_sequence in parameters.T
             ], axis=1,
         )
-        if len is not None:
+        
+        if max_length is not None:
             interpolated_parameters = interpolated_parameters[:max_length]
 
         result = AffineStack.from_array(
@@ -459,6 +460,7 @@ class AffineStack:
             metadata=self.metadata,
         )
         result.set_metadata("z_step", 1)
+        result.set_metadata("stack_shape", [len(interpolated_parameters)] + self.get_metadata("stack_shape")[1:])
 
         return result
 

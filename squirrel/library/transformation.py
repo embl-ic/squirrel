@@ -133,35 +133,34 @@ def apply_affine_transform(
         fill_mode='nearest',
         cval=0.,
         order=3,
+        pivot=None,
         no_offset_to_center=False,
         apply='all',
         scale_canvas=False,
-        verbose=False
+        verbose=False,
 ):
 
     from squirrel.library.affine_matrices import AffineMatrix
 
+    x = np.asarray(x)
+
     if not isinstance(transform, AffineMatrix):
         transform = AffineMatrix.from_array(transform)
+    else:
+        transform = transform.copy()
 
     if transform.ndim != x.ndim:
-        raise ValueError(
-            f"Transform is {transform.ndim}D, but input image is {x.ndim}D."
-        )
-
+        raise ValueError(f"Transform is {transform.ndim}D, but input image is {x.ndim}D.")
     if apply == 'rotation':
         raise NotImplementedError
+    if apply != 'all':
+        raise ValueError(f"Invalid apply mode: {apply!r}.")
 
-    # Preserve the previous default behavior:
-    # a zero pivot means rotation around the image center unless explicitly
-    # disabled.
-    if (
-        not no_offset_to_center
-        and np.allclose(transform.pivot, np.zeros(transform.ndim))
-    ):
-        transform = transform.with_pivot(
-            np.asarray(x.shape, dtype=float) / 2
-        )
+    if pivot is not None:
+        transform = transform.with_pivot(pivot)
+
+    elif not no_offset_to_center:
+        transform = transform.with_pivot(np.asarray(x.shape, dtype=float) / 2)
 
     scipy_matrix, scipy_offset = transform.as_scipy_affine()
 
@@ -185,29 +184,17 @@ def apply_affine_transform(
 
     if scale_canvas:
         if not no_offset_to_center:
-            raise ValueError(
-                "scale_canvas requires no_offset_to_center=True."
-            )
+            raise ValueError("scale_canvas requires no_offset_to_center=True.")
 
-        if not np.allclose(
-            transform.pivot,
-            np.zeros(transform.ndim),
-        ):
-            raise ValueError(
-                "scale_canvas requires a zero pivot."
-            )
+        if not np.allclose(transform.pivot, np.zeros(transform.ndim)):
+            raise ValueError("scale_canvas requires a zero pivot.")
 
         _, _, scale, _ = transform.decompose()
-
         scale_factors = np.diag(scale.linear)
 
-        crop = np.floor(
-            np.asarray(x.shape) / scale_factors
-        ).astype(int)
+        crop = np.floor(np.asarray(x.shape) / scale_factors).astype(int)
 
-        result = result[
-            tuple(slice(0, size) for size in crop)
-        ]
+        result = result[tuple(slice(0, size) for size in crop)]
 
     return result
 

@@ -459,8 +459,11 @@ class AffineStack:
             sequenced=True,
             metadata=self.metadata,
         )
+
         result.set_metadata("z_step", 1)
-        result.set_metadata("stack_shape", [len(interpolated_parameters)] + self.get_metadata("stack_shape")[1:])
+        if self.has_metadata("stack_shape"):
+            stack_shape = self.get_metadata("stack_shape")
+            result.set_metadata("stack_shape", [len(interpolated_parameters), *stack_shape[1:]])
 
         return result
 

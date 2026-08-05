@@ -205,6 +205,8 @@ def get_reshaped_data(h, idx, shape):
 
 def load_data_handle(path, key=None, pattern=None):
 
+    path = str(path)
+
     filetype = get_filetype(path)
 
     if filetype == 'h5':
@@ -288,20 +290,13 @@ class _GenericStack(list):
             return read_png_slice(filepath, return_filepath)
 
     def __getitem__(self, item):
-        print(f'item = {item}')
         if isinstance(item, tuple):
-            print(f'item is a tuple')
             filepaths = [list.__getitem__(self, x) for x in item]
         else:
-            print(f'item is not a tuple')
             filepaths = list.__getitem__(self, item)
-            print(f'filepaths = {filepaths}')
         if isinstance(filepaths, str):
-            print(f'filepaths is a string')
             return self.read_slice(filepaths, return_filepath=False)
         if isinstance(filepaths, list):
-            print(f'filepaths is a list')
-            print('-------------------------------------------------')
             if type(filepaths[0]) is not str:
                 raise ValueError(f'Invalid type of filepaths: {type(filepaths[0])}')
             stack = [self.read_slice(x, return_filepath=False) for x in filepaths]

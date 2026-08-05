@@ -77,44 +77,58 @@ def decompose_affine_workflow(
     return decomposition
 
 
-def apply_affine(
+def apply_affine_workflow(
         image,
         transform,
         out_filepath=None,
         image_key='data',
+        pivot=None,
         no_offset_to_center=False,
-        # pivot=None,
-        apply='all',  # Can be ['all' | 'rotation']
+        apply='all',
         scale_canvas=False,
-        verbose=False
+        verbose=False,
 ):
 
+    from os import PathLike
+
+    from ..library.affine_matrices import AffineMatrix
+    from ..library.io import load_data_handle, write_h5_container
+    from ..library.transformation import apply_affine_transform
+
+    if isinstance(image, (str, PathLike)):
+        image, _ = load_data_handle(image, key=image_key)[:]
+    else:
+        image = np.asarray(image)
+
+    if isinstance(transform, AffineMatrix):
+        transform = transform.copy()
+    elif isinstance(transform, (str, PathLike)):
+        transform = AffineMatrix.read(transform)
+    else:
+        transform = AffineMatrix.from_array(transform)
+
+    if pivot is not None:
+        transform = transform.with_pivot(pivot)
+
     if verbose:
-        print(f'image = {image if type(image) == str else image.shape}')
+        print(f'image.shape = {image.shape}')
         print(f'transform = {transform}')
         print(f'out_filepath = {out_filepath}')
         print(f'image_key = {image_key}')
-
-    from ..library.transformation import apply_affine_transform
-    from ..library.io import load_data_handle, write_h5_container
-
-    if type(image) == str:
-        image, _ = load_data_handle(image, key=image_key)[:]
-
-    if type(transform) == str:
-        from ..library.affine_matrices import AffineMatrix
-        transform = AffineMatrix(filepath=transform)
+        print(f'pivot = {pivot}')
 
     result = apply_affine_transform(
         image,
         transform,
+        pivot=pivot,
         no_offset_to_center=no_offset_to_center,
         apply=apply,
         scale_canvas=scale_canvas,
-        verbose=verbose
+        verbose=verbose,
     )
 
-    write_h5_container(out_filepath, result, key='data')
+    if out_filepath is not None:
+        write_h5_container(out_filepath, result, key='data')
 
     return result
 

@@ -34,8 +34,8 @@ def affine_on_volume():
     scale_canvas = args.scale_canvas
     verbose = args.verbose
 
-    from squirrel.workflows.transformation import apply_affine
-    apply_affine(
+    from squirrel.workflows.transformation import apply_affine_workflow
+    apply_affine_workflow(
         image_filepath,
         transform_filepath,
         out_filepath=out_filepath,

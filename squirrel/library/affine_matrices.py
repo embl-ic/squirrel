@@ -449,7 +449,7 @@ class AffineStack:
                 for parameter_sequence in parameters.T
             ], axis=1,
         )
-        
+
         if max_length is not None:
             interpolated_parameters = interpolated_parameters[:max_length]
 
@@ -1672,6 +1672,39 @@ class AffineMatrix:
             AffineMatrix(scale_matrix, pivot=zero_pivot),
             AffineMatrix(shear_matrix, pivot=zero_pivot),
         )
+
+    def decompose_at_pivot(
+        self,
+        translation_pivot=None,
+    ):
+        """
+        Decompose the affine transform, optionally transferring the positional
+        effect of shear at a selected pivot into the translation component.
+        """
+        if translation_pivot is None:
+            return self.decompose()
+
+        translation_pivot = np.asarray(translation_pivot, dtype=self.dtype)
+
+        if translation_pivot.shape != (self.ndim,):
+            raise ValueError(f"translation_pivot must have shape ({self.ndim},); received {translation_pivot.shape}.")
+
+        pivot_translation = AffineMatrix.from_translation(
+            translation_pivot,
+            pivot=self.pivot,
+            dtype=self.dtype,
+        )
+        inverse_pivot_translation = AffineMatrix.from_translation(
+            -translation_pivot,
+            pivot=self.pivot,
+            dtype=self.dtype,
+        )
+
+        transformed = self @ pivot_translation
+        translation, rotation, scale, shear = transformed.decompose()
+        translation = translation @ inverse_pivot_translation
+
+        return translation, rotation, scale, shear
 
     # ------------------------------------------------------------------
     # Validation and normalization

@@ -178,8 +178,8 @@ def decompose_affine_matrix():
     shear_to_translation_pivot = args.shear_to_translation_pivot
     verbose = args.verbose
 
-    from squirrel.workflows.transformation import decompose_affine
-    decompose_affine(
+    from squirrel.workflows.transformation import decompose_affine_workflow
+    decompose_affine_workflow(
         transform_filepath,
         out_folder=out_folder,
         shear_to_translation_pivot=shear_to_translation_pivot,

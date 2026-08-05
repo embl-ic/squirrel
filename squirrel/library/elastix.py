@@ -131,70 +131,6 @@ def apply_transforms_on_image_stack_slice(
         n_workers=n_workers
     )[:target_image_shape[0], :target_image_shape[1]]
 
-# def save_transforms(parameters, out_filepath, param_order='M', save_order='M', ndim=3, verbose=False):
-#
-#     parameters = np.array(parameters)
-#     if verbose:
-#         print(f'parameters = {parameters}')
-#
-#     def _elastix2m(param):
-#         pr = np.zeros(param.shape, dtype=param.dtype)
-#         pr[:ndim ** 2] = param[:ndim ** 2][::-1]
-#         pr[ndim ** 2:] = param[ndim ** 2:][::-1]
-#         param = pr
-#
-#         pr = np.reshape(param[: ndim ** 2], (ndim, ndim), order='C')
-#         pr = np.concatenate([pr, np.array([param[ndim ** 2:]]).swapaxes(0, 1)], axis=1)
-#         return pr
-#
-#     def _c2m(param):
-#         return np.reshape(param, (ndim, ndim + 1), order='C')
-#
-#     def _f2m(param):
-#         return np.reshape(param, (ndim, ndim + 1), order='F')
-#
-#     def _m2c(param):
-#         return param.flatten(order='C')
-#
-#     def _m2f(param):
-#         return param.flatten(order='F')
-#
-#     def _change_order(params):
-#         if param_order == 'elastix':
-#             params = _elastix2m(params)
-#         if param_order == 'C':
-#             params = _c2m(params)
-#         if param_order == 'F':
-#             params = _f2m(params)
-#         if save_order == 'C':
-#             params = _m2c(params)
-#         if save_order == 'F':
-#             params = _m2f(params)
-#         return params
-#
-#     if verbose:
-#         print(f'parameters.shape = {parameters.shape}')
-#         print(f'parameters.ndim = {parameters.ndim}')
-#
-#     if param_order != save_order:
-#         if (param_order != 'M' and parameters.ndim == 2) or (param_order == 'M' and parameters.ndim == 3):
-#             parameters = parameters.tolist()
-#             for idx, p in enumerate(parameters):
-#                 parameters[idx] = _change_order(np.array(p))
-#         else:
-#             parameters = _change_order(parameters)
-#
-#     import json
-#
-#     if verbose:
-#         print(f'parameters.shape = {parameters.shape}')
-#
-#     if out_filepath is not None:
-#         with open(out_filepath, mode='w') as f:
-#             json.dump(parameters.tolist(), f, indent=2)
-#
-#     return parameters
-
 
 def get_affine_rotation_parameters(euler_angles):
     return sitk.Euler3DTransform((0, 0, 0), *euler_angles).GetMatrix()
@@ -1017,8 +953,8 @@ def slice_wise_stack_to_stack_alignment(
 ):
 
     if transform in ['translation', 'affine']:
-        from ..library.affine_matrices import AffineStack
-        result_transforms = AffineStack(is_sequenced=True, pivot=[0., 0.])
+        from squirrel.library.affine_matrices import AffineStack
+        result_transforms = AffineStack(sequenced=True, pivot=[0., 0.])
     elif transform in ['bspline', 'BSplineTransform']:
         result_transforms = ElastixStack()
     else:
@@ -1495,26 +1431,6 @@ class ElastixMultiStepStack:
         if verbose:
             print(f'result_volume[0].shape = {result_volume[0].shape}')
 
-        # else:
-        #
-        #     from concurrent.futures import ThreadPoolExecutor
-        #     with ThreadPoolExecutor(max_workers=n_workers) as tpe:
-        #         tasks = [
-        #             tpe.submit(
-        #                 apply_transforms_on_image_stack_slice,
-        #                 image_stack_h,
-        #                 image_idx,
-        #                 self[stack_idx],
-        #                 target_image_shape,
-        #                 z_range[1],
-        #                 1,
-        #                 quiet,
-        #                 verbose
-        #             )
-        #             for stack_idx, image_idx in enumerate(range(*z_range))
-        #         ]
-        #         result_volume = [task.result() for task in tasks]
-
         return np.clip(np.array(result_volume), 0, max_val).astype(dtype)
 
     def to_disk(self, dirpath):
@@ -1604,12 +1520,6 @@ def search_best_registration(fixed, moving):
         1 - normalized_cross_correlation(fixedg, movingg, shift)
         for shift in shifts
     ]
-    # mis = []
-    # for shift in shifts:
-    #     moving_ = ndi_shift(moving, shift=shift)
-    #     mask = np.ones(moving.shape)
-    #     mask[moving_ == 0] = 0
-    #     mis.append(compute_mattes_mi(fixed, moving_, mask=mask))
     mis = [
         compute_mattes_mi(fixedg, ndi_shift(movingg, shift=shift), bins=50, sampling_fraction=0.2)
         for shift in shifts
@@ -1619,7 +1529,6 @@ def search_best_registration(fixed, moving):
     print(f'mis = {mis}')
 
     # Depending on which one was best: refine with elastix (bin1)
-    # idx = np.argmin(errors)
     idx = np.argmin(mis)
     print(f'idx = {idx}')
 
@@ -1649,22 +1558,6 @@ def search_best_registration(fixed, moving):
     final_error = 1 - normalized_cross_correlation(fixedg, movingg, final_shift)
     final_mi = compute_mattes_mi(fixedg, ndi_shift(movingg, shift=final_shift))
 
-    # from matplotlib import pyplot as plt
-    # for shift in shifts:
-    #     plt.figure()
-    #     plt.imshow(np.array([
-    #         fixed,
-    #         ndi_shift(moving, shift=shift, order=1, prefilter=False),
-    #         fixed
-    #     ]).transpose([1, 2, 0]))
-    # plt.figure()
-    # plt.imshow(np.array([
-    #     fixed,
-    #     ndi_shift(moving, shift=final_shift, order=1, prefilter=False),
-    #     fixed
-    # ]).transpose([1, 2, 0]))
-    # plt.show()
-
     if final_mi < min(mis):
         print('final alignment improved!')
         print(f'minimum error: {final_error}')
@@ -1678,111 +1571,4 @@ def search_best_registration(fixed, moving):
 
 if __name__ == '__main__':
 
-    # a = [1, 2, 3, 4, 5, 6]
-    # print(f'a = {a}')
-    # b = affine_to_c(a)
-    # print(f'b = {b}')
-    # c = c_to_elastix(b)
-    # print(f'c = {c}')
-    #
-    # a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    # print(f'a = {a}')
-    # b = affine_to_c(a)
-    # print(f'b = {b}')
-    # c = c_to_elastix(b)
-    # print(f'c = {c}')
-
-    # es = ElastixStack(dirpath='/media/julian/Data/projects/hennies/amst_devel/240624_snamst_kors_dT/amst.meta/amst/')
-    # print(es.image_shape())
-
-    # initialize_offsets(
-    #     '/media/julian/Data/projects/hennies/amst_devel/amst2-test-auto-init/tiffs/slice_01926_z=19.3991um.tif',
-    #     '/media/julian/Data/projects/hennies/amst_devel/amst2-test-auto-init/tiffs/slice_01927_z=19.4090um.tif',
-    #     debug_dir='/media/julian/Data/tmp/init_elx_align/'
-    # )
-
-    from tifffile import imread, imwrite
-    # # moving_img = imread('/media/julian/Data/projects/hennies/amst_devel/amst2-test-auto-init/tiffs/slice_01927_z=19.4090um.tif')
-    # # fixed_img = imread('/media/julian/Data/projects/hennies/amst_devel/amst2-test-auto-init/tiffs/slice_01926_z=19.3991um.tif')
-    # # moving_img = imread('/media/julian/Data/projects/hennies/amst_devel/amst2-hela-join-parts/tiffs/slice_01786.tif')
-    # # fixed_img = imread('/media/julian/Data/projects/hennies/amst_devel/amst2-hela-join-parts/tiffs/slice_01787.tif')
-    #
-    # fixed_img = imread('/media/julian/Data/courses/2025_embo_volume_sem/hela_sl200_455_uint8_cropped_to_data_g4_binz4xy8/slice_00449.tif')
-    # moving_img = imread('/media/julian/Data/courses/2025_embo_volume_sem/hela_sl200_455_uint8_cropped_to_data_g4_binz4xy8/slice_00450.tif')
-    #
-    # register_with_elastix(
-    #     fixed_img,
-    #     moving_img,
-    #     transform='translation',
-    #     initialize_offsets_method='init_elx',
-    #     initialize_offsets_kwargs=dict(binning=4, spacing=64),
-    #     debug_dirpath='/media/julian/Data/courses/2025_embo_volume_sem/tmp/debug'
-    # )
-
-    # from squirrel.library.io import load_data_handle
-    # from squirrel.library.affine_matrices import AffineStack
-    # stack_fp = '/media/julian/Data/projects/hennies/amst_devel/amst2-test-example/amst-full/pre-align/nsbs-pre-align.json'
-    # img_stack_fp = '/media/julian/Data/projects/hennies/amst_devel/amst2-test-example/tiffs-segmentation-uint32/'
-    # img_stack, shp = load_data_handle(img_stack_fp)
-    # stack1 = AffineStack(filepath=stack_fp)
-    # stack2 = '/media/julian/Data/projects/hennies/amst_devel/amst2-test-example/amst-full/amst/amst/amst.meta/amst/'
-    # stack2 = ElastixStack(dirpath=stack2, image_shape=shp)
-    # emss = ElastixMultiStepStack(stacks=[stack1, stack2], image_shape=shp[1:])
-    #
-    # emss.apply_on_image_stack(img_stack, shp, resample_interpolator='nearest')
-
-    # fp = '/media/julian/Data/projects/hennies/amst_devel/amst2-empiar_12608-array_tomo/evaluation/images-amst/input_0001.h5'
-    # from h5py import File
-    # with File(fp, mode='r') as f:
-    #     fixed_img = f['data'][11, :]
-    #     moving_img = f['data'][12, :]
-    # search_best_registration(fixed_img, moving_img)
-    # # from matplotlib import pyplot as plt
-    # # plt.imshow(moving_img)
-    # # plt.show()
-
-    from tifffile import imread
-    img = imread('/media/julian/Data/datasets/empiar/12608_array_tomo/data/Micrographs/04_Pdzd8cKO_Fkbp8KD_tif/0048.tif')
-
-    from squirrel.library.image import image_to_shape
-    img = image_to_shape(img, [4792, 5685])
-    from matplotlib import pyplot as plt
-    # plt.imshow(img)
-
-    from SimpleITK import ReadParameterFile
-    from squirrel.library.affine_matrices import AffineStack
-    trafos1 = AffineStack(filepath='/media/julian/Data/projects/hennies/amst_devel/amst2-empiar_12608-array_tomo/sift-ap.json')
-    trafos2 = AffineStack(filepath='/media/julian/Data/projects/hennies/amst_devel/amst2-empiar_12608-array_tomo/sift_seq_it2.json')
-
-    from squirrel.library.elastix import load_transform_stack_from_multiple_files
-    trafos = [
-        trafos1[48],
-        ReadParameterFile('/media/julian/Data/projects/hennies/amst_devel/amst2-empiar_12608-array_tomo/amst/amst.meta/amst/transform_00048.txt'),
-        trafos2[48],
-        ReadParameterFile(
-            '/media/julian/Data/projects/hennies/amst_devel/amst2-empiar_12608-array_tomo/amst_it2/amst.meta/amst/transform_00048.txt')
-    ]
-
-    result1 = apply_transforms_on_image(
-        img, trafos
-    )
-
-    result2 = apply_transforms_on_image(img, [trafos[0]])
-    result2 = apply_transforms_on_image(result2, [trafos[1]])
-    result2 = apply_transforms_on_image(result2, [trafos[2]])
-    result2 = apply_transforms_on_image(result2, [trafos[3]])
-
-    print((result1 - result2).sum())
-
-    plt.imshow(
-        np.array([
-            result2,
-            result1,
-            result2
-        ]).transpose([1, 2, 0])
-    )
-
-    plt.figure()
-    plt.imshow(result1 - result2)
-    plt.show()
-
+    pass

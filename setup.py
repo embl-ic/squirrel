@@ -13,7 +13,6 @@ setup(
     packages=find_packages(),
     entry_points={  # Naming scheme: sq-<namespace>-<func-name>, e.g. sq-stack-tif_nearest_scaling
         'console_scripts': [
-            'apply_affine_on_volume = squirrel.transformation:affine_on_volume',
             'apply_rotation_and_scale = squirrel.transformation:apply_rotation_and_scale',
             'apply_z_chunks_to_volume = squirrel.transformation:apply_z_chunks_to_volume',
             'average_affine_on_volume = squirrel.transformation:average_affine_on_volume',
@@ -76,6 +75,7 @@ setup(
             'sq-stack-merge_tif_stacks = squirrel.stack_operations:merge_tif_stacks',
             'sq-stack-to_consistent_shapes = squirrel.stack_operations:stack_to_consistent_shapes',
             'sq-transform-apply_stack_alignment = squirrel.transformation:apply_stack_alignment',
+            'sq-transform-apply_affine = squirrel.transformation:affine_on_volume',
             'sq-transform-apply_auto_pad = squirrel.transformation:apply_auto_pad',
             'sq-transform-get_affine_transforms_substack = squirrel.transformation:get_affine_transforms_substack'
         ]

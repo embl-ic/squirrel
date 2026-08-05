@@ -1,5 +1,5 @@
 
-def affine_on_volume():
+def apply_affine():
 
     # ----------------------------------------------------
     import argparse
@@ -18,8 +18,8 @@ def affine_on_volume():
                         help='Internal path of the moving input; default="data"; used if moving_filepath is h5 file')
     parser.add_argument('--no_offset_to_center', action='store_true',
                         help="If set, the image is rotated around it's origin")
-    # parser.add_argument('--pivot', type=float, default=None, nargs=3,
-    #                     help='Center point location')
+    parser.add_argument('--pivot', type=float, default=None, nargs=3,
+                        help='Center point location')
     parser.add_argument('--scale_canvas', action='store_true',
                         help='Scale the image canvas to match the scaling of the data. Beware of shear and rotation!')
     parser.add_argument('-v', '--verbose', action='store_true')
@@ -30,7 +30,7 @@ def affine_on_volume():
     out_filepath = args.out_filepath
     image_key = args.image_key
     no_offset_to_center = args.no_offset_to_center
-    # pivot = args.pivot
+    pivot = args.pivot
     scale_canvas = args.scale_canvas
     verbose = args.verbose
 
@@ -41,7 +41,7 @@ def affine_on_volume():
         out_filepath=out_filepath,
         image_key=image_key,
         no_offset_to_center=no_offset_to_center,
-        # pivot=pivot,
+        pivot=pivot,
         scale_canvas=scale_canvas,
         verbose=verbose
     )

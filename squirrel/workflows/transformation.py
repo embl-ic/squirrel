@@ -133,68 +133,61 @@ def apply_affine_workflow(
     return result
 
 
-def apply_sequential_affine(
+def apply_affines_workflow(
         image,
         transforms,
         out_filepath=None,
         image_key='data',
         no_offset_to_center=False,
         pivot=None,
-        verbose=False
+        verbose=False,
 ):
+    """
+    Compose multiple affine transforms and apply the result to an image.
+
+    Parameters
+    ----------
+    transforms
+        Iterable containing AffineMatrix instances, affine arrays, or paths
+        to stored AffineMatrix files.
+    """
+    from os import PathLike
+    from pathlib import Path
 
     from ..library.affine_matrices import AffineMatrix
 
-    transform = None
-    for t in transforms:
-        if transform is None:
-            transform = AffineMatrix(filepath=t)
-        else:
-            transform = transform.dot(AffineMatrix(filepath=t))
+    transforms = list(transforms)
 
-    transform.set_pivot(pivot)
+    if len(transforms) == 0:
+        raise ValueError("transforms must contain at least one affine transformation.")
 
-    transform.to_file(
-        os.path.join(
-            os.path.split(out_filepath)[0],
-            os.path.splitext(os.path.split(out_filepath)[1])[0] + '.json'
-        )
-    )
+    def normalize_transform(transform):
+        if isinstance(transform, AffineMatrix):
+            return transform.copy()
+        if isinstance(transform, (str, PathLike)):
+            return AffineMatrix.read(transform)
+        return AffineMatrix.from_array(transform)
 
-    # from ..library.transformation import load_transform_matrix, validate_and_reshape_matrix
-    # if len(transforms) == 1:
-    #     transforms = load_transform_matrix(transforms[0])
-    #     transform = validate_and_reshape_matrix(transforms[0], 3)
-    #     for t in transforms[1:]:
-    #         transform = np.dot(transform, validate_and_reshape_matrix(t, 3))
-    #
-    # else:
-    #     transform = validate_and_reshape_matrix(load_transform_matrix(transforms[0]), 3)
-    #     for t in transforms[1:]:
-    #         t = validate_and_reshape_matrix(load_transform_matrix(t), 3)
-    #         transform = np.dot(transform, t)
-    #
-    # from ..library.elastix import save_transforms
-    # import os
-    # save_transforms(
-    #     transform[:3, :],
-    #     os.path.join(
-    #         os.path.split(out_filepath)[0],
-    #         os.path.splitext(os.path.split(out_filepath)[1])[0] + '.json'
-    #     ),
-    #     param_order='M',
-    #     save_order='C',
-    #     ndim=3,
-    #     verbose=verbose
-    # )
+    transform = normalize_transform(transforms[0])
 
-    apply_affine(
+    for next_transform in transforms[1:]:
+        transform = transform @ normalize_transform(next_transform)
+
+    if pivot is not None:
+        transform = transform.with_pivot(pivot)
+
+    if out_filepath is not None:
+        transform_filepath = Path(out_filepath).with_suffix(".json")
+        transform.write(transform_filepath)
+
+    return apply_affine_workflow(
         image,
         transform,
         out_filepath=out_filepath,
         image_key=image_key,
+        pivot=pivot,
         no_offset_to_center=no_offset_to_center,
-        verbose=verbose
+        verbose=verbose,
     )
 
 

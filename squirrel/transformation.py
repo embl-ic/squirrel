@@ -5,7 +5,7 @@ def apply_affine():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Applies an affine transformation on a volume',
+        description='Applies an affine transformation to an image or volume',
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument('image_filepath', type=str,
@@ -43,6 +43,50 @@ def apply_affine():
         no_offset_to_center=no_offset_to_center,
         pivot=pivot,
         scale_canvas=scale_canvas,
+        verbose=verbose
+    )
+
+
+def apply_affines():
+
+    # ----------------------------------------------------
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Applies multiple affine transformations to an image or volume',
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument('image_filepath', type=str,
+                        help='Input filepath for the moving volume (nii or h5)')
+    parser.add_argument('transform_filepaths', type=str, nargs='+',
+                        help='Json or csv file(s) containing the transformations')
+    parser.add_argument('-o', '--out_filepath', type=str, default=None,
+                        help='Output filepath for the result file (only h5 for now)')
+    parser.add_argument('--image_key', type=str, default='data',
+                        help='Internal path of the moving input; default="data"; used if moving_filepath is h5 file')
+    parser.add_argument('--no_offset_to_center', action='store_true',
+                        help="If set, the image is rotated around it's origin")
+    parser.add_argument('--pivot', type=float, default=None, nargs=3,
+                        help='Center point location')
+    parser.add_argument('-v', '--verbose', action='store_true')
+
+    args = parser.parse_args()
+    image_filepath = args.image_filepath
+    transform_filepaths = args.transform_filepaths
+    out_filepath = args.out_filepath
+    image_key = args.image_key
+    no_offset_to_center = args.no_offset_to_center
+    pivot = args.pivot
+    verbose = args.verbose
+
+    from squirrel.workflows.transformation import apply_affines_workflow
+    apply_affines_workflow(
+        image_filepath,
+        transform_filepaths,
+        out_filepath=out_filepath,
+        image_key=image_key,
+        no_offset_to_center=no_offset_to_center,
+        pivot=pivot,
         verbose=verbose
     )
 
@@ -105,50 +149,6 @@ def apply_stack_alignment():
         z_range=z_range,
         n_workers=n_workers,
         verbose=verbose,
-    )
-
-
-def sequential_affine_on_volume():
-
-    # ----------------------------------------------------
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description='Applies an affine transformation on a volume',
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    parser.add_argument('image_filepath', type=str,
-                        help='Input filepath for the moving volume (nii or h5)')
-    parser.add_argument('transform_filepaths', type=str, nargs='+',
-                        help='Json or csv file(s) containing the transformations')
-    parser.add_argument('-o', '--out_filepath', type=str, default=None,
-                        help='Output filepath for the result file (only h5 for now)')
-    parser.add_argument('--image_key', type=str, default='data',
-                        help='Internal path of the moving input; default="data"; used if moving_filepath is h5 file')
-    parser.add_argument('--no_offset_to_center', action='store_true',
-                        help="If set, the image is rotated around it's origin")
-    parser.add_argument('--pivot', type=float, default=None, nargs=3,
-                        help='Center point location')
-    parser.add_argument('-v', '--verbose', action='store_true')
-
-    args = parser.parse_args()
-    image_filepath = args.image_filepath
-    transform_filepaths = args.transform_filepaths
-    out_filepath = args.out_filepath
-    image_key = args.image_key
-    no_offset_to_center = args.no_offset_to_center
-    pivot = args.pivot
-    verbose = args.verbose
-
-    from squirrel.workflows.transformation import apply_sequential_affine
-    apply_sequential_affine(
-        image_filepath,
-        transform_filepaths,
-        out_filepath=out_filepath,
-        image_key=image_key,
-        no_offset_to_center=no_offset_to_center,
-        pivot=pivot,
-        verbose=verbose
     )
 
 

@@ -645,7 +645,9 @@ class AffineStack:
         Parameters
         ----------
         stack_bounds
-            Per-slice bounds in the form ``[y, x, height, width]``.
+            Per-slice bounds in NumPy slicing form:
+
+            ``[y_min, x_min, y_max, x_max]``
 
             If None, the metadata entry ``"bounds"`` is used.
 
@@ -657,11 +659,12 @@ class AffineStack:
         AffineStack
             New shifted affine stack.
 
-        numpy.ndarray
-            New spatial output shape ``[height, width]``.
+        list
+            New output shape ``[z, height, width]``.
         """
         if self.ndim != 2:
             raise ValueError("auto_pad currently only supports 2D affine transforms.")
+
         if len(self) == 0:
             raise ValueError("Cannot auto-pad an empty AffineStack.")
 
@@ -672,21 +675,33 @@ class AffineStack:
             stack_bounds = self.get_metadata("bounds")
 
         stack_bounds = np.asarray(stack_bounds, dtype=float)
+
         if stack_bounds.shape != (len(self), 4):
             raise ValueError(f"stack_bounds must have shape ({len(self)}, 4); received {stack_bounds.shape}.")
         if not np.isfinite(stack_bounds).all():
             raise ValueError("stack_bounds values must all be finite.")
-        if np.any(stack_bounds[:, 2:] < 0):
-            raise ValueError("Bounds height and width must be non-negative.")
+        if np.any(stack_bounds[:, 2] < stack_bounds[:, 0]):
+            raise ValueError("Each y_max value must be greater than or equal to y_min.")
+        if np.any(stack_bounds[:, 3] < stack_bounds[:, 1]):
+            raise ValueError("Each x_max value must be greater than or equal to x_min.")
 
         extra_padding = float(extra_padding)
         if not np.isfinite(extra_padding) or extra_padding < 0:
             raise ValueError("extra_padding must be a finite non-negative value.")
 
         def transform_bounds(matrix, bounds):
-            y, x, height, width = bounds
+            y_min, x_min, y_max, x_max = bounds
 
-            corners = np.array([[y, x], [y, x + width], [y + height, x], [y + height, x + width]], dtype=float)
+            corners = np.array(
+                [
+                    [y_min, x_min],
+                    [y_min, x_max],
+                    [y_max, x_min],
+                    [y_max, x_max],
+                ],
+                dtype=float,
+            )
+
             transformed_corners = matrix.inverse().apply(corners)
 
             return np.array([transformed_corners.min(axis=0), transformed_corners.max(axis=0)])
@@ -699,6 +714,7 @@ class AffineStack:
         global_maximum = transformed_bounds[:, 1].max(axis=0)
 
         shift = global_minimum - extra_padding
+
         shift_matrix = AffineMatrix.from_translation(shift, pivot=self.pivot, dtype=self.dtype)
 
         shifted_stack = AffineStack(
@@ -706,13 +722,11 @@ class AffineStack:
             sequenced=self.sequenced,
             metadata=self.metadata,
         )
-
         output_shape = [
-            len(self),
+            len(self), 
             *np.ceil(global_maximum - global_minimum + 2 * extra_padding).astype(int).tolist(),
         ]
-
-        shifted_stack.set_metadata('stack_shape', output_shape)
+        shifted_stack.set_metadata("stack_shape", output_shape)
 
         return shifted_stack, output_shape
     

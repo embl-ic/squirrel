@@ -352,10 +352,11 @@ def ome_zarr_to_stack_workflow(
 
     # Load the ome zarr
     from squirrel.library.data import norm_z_range
-    from squirrel.library.ome_zarr import get_ome_zarr_handle
-    handle = get_ome_zarr_handle(ome_zarr_filepath, ome_zarr_key, mode='r')
-    z_range = norm_z_range(z_range, handle.shape[0])
-    chunk_data = handle[z_range[0]: z_range[1], :]
+    from squirrel.library.ome_zarr import OMEZarrStore
+    oz = OMEZarrStore(ome_zarr_filepath, mode='r')
+    shape = oz.shape(0)
+    z_range = norm_z_range(z_range, shape[0])
+    chunk_data = oz.dataset(0)[z_range[0]: z_range[1], :]
 
     # Save to the tif stack
     if not os.path.exists(target_dirpath):

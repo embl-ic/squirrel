@@ -107,6 +107,8 @@ def vsnr_on_image(
 ):
 
     # --- Prepare the image for VSNR ---
+    if verbose:
+        print(f'Preparing image for VSNR ...')
 
     image, bounds, input_shape = crop_to_bounds(image, even_shape=False)
     if verbose:
@@ -115,6 +117,8 @@ def vsnr_on_image(
     image, image_maximum, image_dtype = normalize(image)
 
     # --- Run VSNR ---
+    if verbose:
+        print(f'Running VSNR for image of size {image.shape} with algo={algo} ...')
 
     image = vsnr(
         image,
@@ -125,6 +129,8 @@ def vsnr_on_image(
     )
 
     # --- Bring the resulting image back to the input domain ---
+    if verbose:
+        print(f'Bringing the resulting image back to the input domain ...')
 
     image = un_normalize(image, image_maximum, image_dtype)
 

@@ -91,7 +91,7 @@ def _adjust_greyscale_in_image(
     img = img.astype('float32')
     img -= greys_in[0]
     img /= greys_in[1] - greys_in[0]
-    img *= greys_out[1] - greys_in[0]
+    img *= greys_out[1] - greys_out[0]
     img += greys_out[0]
     img[img < 0] = 0
     img[img > np.iinfo(cast_dtype).max] = np.iinfo(cast_dtype).max
@@ -147,7 +147,7 @@ def clahe_on_image(
         tile_grid_size = (np.array(image.shape) / np.array(tile_grid_size)).astype(int).tolist()
 
     from cv2 import createCLAHE
-    clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size) 
 
     mask = None
     if auto_mask:

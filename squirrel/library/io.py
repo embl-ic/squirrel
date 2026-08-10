@@ -104,11 +104,6 @@ def get_file_list(path, pattern='*'):
     return sorted(glob(os.path.join(path, pattern)))
 
 
-# NOTE: Deprecated
-# def load_tif_stack(path, pattern='*'):
-#     return [read_tif_slice(filepath, return_filepath=False) for filepath in get_file_list(path, pattern)]
-
-
 def write_nii_file(data, filepath, scale=None):
     # FIXME add tests
     import nibabel as nib
@@ -255,9 +250,15 @@ def load_data_handle(path, key=None, pattern=None):
         return h, h.shape
 
     if filetype == 'ome_zarr':
-        from squirrel.library.ome_zarr import get_ome_zarr_handle
-        h = get_ome_zarr_handle(path, key if key is not None else 's0', 'r')
-        return h, h.shape
+        from squirrel.library.ome_zarr import OMEZarrStore
+        oz = OMEZarrStore(path, mode='r')
+        if isinstance(key, int):
+            level = key
+        elif isinstance(key, str) and key.startswith('s'):
+            level = int(key[1:])
+        else: 
+            raise ValueError(f'Only accepting datasets with a key of the format "sx". Got {key}')
+        return oz.dataset(level), oz.shape(level)
 
     raise RuntimeError(f'No valid filetype: {filetype}')
 
@@ -365,6 +366,22 @@ def write_stack(path, data, key='data', id_offset=0):
         return
     if filetype == 'n5':
         write_n5_container(path, data, key=key)
+        return
+    if filetype == 'ome_zarr':
+        from squirrel.library.ome_zarr import OMEZarrStore
+        print(f'Creating ome-zarr ...')
+        oz = OMEZarrStore.create(
+            path=path,
+            dtype=data.dtype,
+            chunks=(128, 128, 128),
+            downsample_factors=(2, 2),
+            shape=data.shape,
+            shards=None
+        )
+        print('Writing data ...')
+        oz.write(0, position=[0, 0, 0], data=data, update_pyramid=False)
+        print('Building pyramid ...')
+        oz.rebuild_pyramid(n_threads=os.cpu_count())
         return
     raise ValueError(f'Invalid filetype={filetype} of target path={path}')
 

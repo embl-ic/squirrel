@@ -616,25 +616,11 @@ def scale_sequential_affines_workflow(
         xy_pivot=(0., 0.),
         verbose=False
 ):
-    from ..library.transformation import load_transform_matrices, scale_sequential_affines
-    from ..library.elastix import save_transforms
-    transforms = np.array(load_transform_matrices(transform_filepath, validate=True, ndim=2))
 
-    if verbose:
-        print(f'scale = {scale}')
-        print(f'transforms.shape = {transforms.shape}')
-
-    transforms = scale_sequential_affines(transforms, scale, xy_pivot)
-
-    if verbose:
-        print(f'transforms.shape = {transforms.shape}')
-
-    # Prepare for saving
-    transforms = [save_transforms(x, None, param_order='M', save_order='C', ndim=2)[:6].tolist() for x in transforms]
-
-    import json
-    with open(out_filepath, mode='w') as f:
-        json.dump(transforms, f, indent=2)
+    from ..library.affine_matrices import AffineStack
+    transforms = AffineStack(filepath=transform_filepath)
+    transforms = transforms.get_scaled(scale)
+    transforms.to_file(out_filepath)
 
 
 def sequence_affine_stack_workflow(
@@ -874,6 +860,23 @@ def crop_transform_sequence_workflow(transform_filepath, out_filepath, z_range, 
     out_stack = stack.new_stack_with_same_meta(stack[z_range[0]: z_range[1]])
 
     out_stack.to_file(out_filepath)
+
+
+def get_affine_transforms_substack_workflow(transform_filepath, out_filepath, z_range, verbose=False):
+
+    if verbose:
+        print(f'transform_filepath = {transform_filepath}')
+        print(f'out_filepath = {out_filepath}')
+        print(f'z_range = {z_range}')
+
+    from squirrel.library.affine_matrices import AffineStack
+
+    stack = AffineStack(filepath=transform_filepath)
+
+    import numpy as np
+    substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
+
+    substack.to_file(out_filepath)
 
 
 if __name__ == '__main__':

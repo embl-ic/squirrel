@@ -121,11 +121,13 @@ def merge_tif_stacks_workflow(
         out_pattern='slice_{:05d}.tif',
         pad_canvas=False,
         inconsistent_shapes=False,
+        add_shifts=None,
         verbose=False
 ):
     if verbose:
         print(f'stack_folders = {stack_folders}')
         print(f'out_folder = {out_folder}')
+        print(f'add_shifts = {add_shifts}')
 
     from ..library.io import get_filetype
     assert get_filetype(stack_folders[0]) == get_filetype(stack_folders[1]) == 'dir'
@@ -133,33 +135,53 @@ def merge_tif_stacks_workflow(
     if not os.path.exists(out_folder):
         os.mkdir(out_folder)
 
+    shift = None
+    if add_shifts is not None:
+        pad_canvas = True
+        if len(add_shifts) != len(stack_folders):
+            raise ValueError(f'Supply a shift for every stack even if it is zero! add_shifts = {add_shifts}')
+        if not all([len(this_shift) == 2 for this_shift in add_shifts]):
+            raise ValueError(f'Supply x and y value for every shift! add_shifts = {add_shifts}')
+        add_shifts = np.array(add_shifts)
+        add_shifts -= np.min(add_shifts, axis=0)
+        if verbose:
+            print(f'After adjustment: add_shifts = {add_shifts}')
+        from scipy.ndimage import shift
+
     if pad_canvas:
 
         from ..library.io import load_data_handle, write_tif_slice
         from ..library.image import image_to_shape
         shapes = []
         handles = []
-        for stack in stack_folders:
+        for idx, stack in enumerate(stack_folders):
             h, s = load_data_handle(stack, pattern=pattern)
             if inconsistent_shapes:
                 print('Checking for inconsistent shapes')
                 shapes.append(h.get_shape(check_all=True)[1:])
+                if add_shifts is not None:
+                    shapes[-1] += add_shifts[idx]
             else:
-                shapes.append(s[1:])  # only y and x
+                shapes.append(np.array(s[1:]))  # only y and x
+                if add_shifts is not None:
+                    shapes[-1] += add_shifts[idx]
             handles.append(h)
         new_shape = np.max(shapes, axis=0)
         if verbose:
             print(f'new_shape = {new_shape}')
         out_idx = 0
-        for h in handles:
+        for hidx, h in enumerate(handles):
             if verbose:
                 print(f'this_shape = {h[0].shape}')
             # for img in h[:]:
             for idx in range(len(h)):
                 img = h[idx]
                 print(f'out_idx = {out_idx}')
+                img = image_to_shape(img, new_shape)
+                if add_shifts is not None:
+                    img = shift(img, shift=add_shifts[hidx], order=0)
                 write_tif_slice(
-                    image_to_shape(img, new_shape),
+                    img,
                     out_folder,
                     out_pattern.format(out_idx)
                 )
@@ -250,47 +272,121 @@ def stack_to_ome_zarr_workflow(
         print(f'n_threads = {n_threads}')
 
     from squirrel.library.data import norm_z_range
+    from squirrel.library.io import load_data_handle
+    from squirrel.library.ome_zarr import OMEZarrStore
 
-    # Load the stack slices
-    from ..library.io import load_data_handle
-    input_stack_handle, input_stack_shape = load_data_handle(stack_path, key=stack_key, pattern=stack_pattern)
+    # Open input
+    input_stack_handle, input_stack_shape = load_data_handle(
+        stack_path,
+        key=stack_key,
+        pattern=stack_pattern,
+    )
 
     z_range = norm_z_range(z_range, input_stack_shape[0])
-    if xy_range is None:
-        chunk_data = input_stack_handle[z_range[0]: z_range[1]]
-    else:
-        chunk_data = input_stack_handle[z_range[0]: z_range[1]][
-            :,
-            xy_range[1]: xy_range[1] + xy_range[3],
-            xy_range[0]: xy_range[0] + xy_range[2]
-        ]
 
-    # Create ome zarr if necessary
+    if xy_range is None:
+
+        chunk_data = input_stack_handle[z_range[0]: z_range[1]]
+        chunk_position = (z_range[0], 0, 0)
+
+    else:
+
+        chunk_data = input_stack_handle[
+            z_range[0]:z_range[1],
+            xy_range[1]:xy_range[1] + xy_range[3],
+            xy_range[0]:xy_range[0] + xy_range[2],
+        ]
+        chunk_position = (z_range[0], xy_range[1], xy_range[0])
+
+    # Create store if necessary
     if not append:
-        assert xy_range is None, 'ome-zarr creation not implemented for cropping in xy!'
-        from ..library.ome_zarr import create_ome_zarr
-        create_ome_zarr(
+
+        store = OMEZarrStore.create(
             ome_zarr_filepath,
-            shape=input_stack_shape,
+            shape=input_stack_shape if xy_range is None else (
+                input_stack_shape[0],
+                xy_range[3],
+                xy_range[2],
+            ),
+            dtype=chunk_data.dtype,
+            chunks=chunk_size,
+            downsample_factors=(
+                (downsample_factors,) * 8
+                if isinstance(downsample_factors, int)
+                else tuple(
+                    (f, f, f)
+                    if np.isscalar(f)
+                    else tuple(f)
+                    for f in downsample_factors
+                )
+            ),
             resolution=resolution,
             unit=unit,
-            downsample_type=downsample_type,
-            downsample_factors=downsample_factors,
-            chunk_size=chunk_size,
-            dtype=input_stack_handle[0].dtype,
-            name=name
+            downsample_method=downsample_type,
+            ome_version='0.4',
+            zarr_format=2,
+            overwrite=True,
         )
 
-    # Write the stack to ome_zarr
-    from squirrel.library.ome_zarr import chunk_to_ome_zarr, get_ome_zarr_handle
-    chunk_to_ome_zarr(
-        chunk_data,
-        [z_range[0], 0, 0],
-        get_ome_zarr_handle(ome_zarr_filepath, mode='a'),
-        key='s0',
-        populate_downsample_layers=True,
-        verbose=verbose
-    )
+    else:
+
+        store = OMEZarrStore(ome_zarr_filepath, mode="r+")
+
+    # Write output
+    store.write(0, chunk_position, chunk_data, update_pyramid=True)
+
+    # if verbose:
+    #     print(f'stack_path = {stack_path}')
+    #     print(f'ome_zarr_filepath = {ome_zarr_filepath}')
+    #     print(f'stack_pattern = {stack_pattern}')
+    #     print(f'stack_key = {stack_key}')
+    #     print(f'chunk_size = {chunk_size}')
+    #     print(f'z_range = {z_range}')
+    #     print(f'xy_range = {xy_range}')
+    #     print(f'n_threads = {n_threads}')
+
+    # from squirrel.library.data import norm_z_range
+
+    # # Load the stack slices
+    # from ..library.io import load_data_handle
+    # input_stack_handle, input_stack_shape = load_data_handle(stack_path, key=stack_key, pattern=stack_pattern)
+
+    # z_range = norm_z_range(z_range, input_stack_shape[0])
+    # if xy_range is None:
+    #     chunk_data = input_stack_handle[z_range[0]: z_range[1]]
+    # else:
+    #     chunk_data = input_stack_handle[z_range[0]: z_range[1]][
+    #         :,
+    #         xy_range[1]: xy_range[1] + xy_range[3],
+    #         xy_range[0]: xy_range[0] + xy_range[2]
+    #     ]
+
+    # # Create ome zarr if necessary
+    # if not append:
+    #     assert xy_range is None, 'ome-zarr creation not implemented for cropping in xy!'
+    #     from ..library.ome_zarr import create_ome_zarr
+    #     create_ome_zarr(
+    #         ome_zarr_filepath,
+    #         shape=input_stack_shape,
+    #         resolution=resolution,
+    #         unit=unit,
+    #         downsample_type=downsample_type,
+    #         downsample_factors=downsample_factors,
+    #         chunk_size=chunk_size,
+    #         dtype=input_stack_handle[0].dtype,
+    #         name=name
+    #     )
+
+    # # Write the stack to ome_zarr
+    # from squirrel.library.ome_zarr import chunk_to_ome_zarr, get_ome_zarr_handle
+    # chunk_to_ome_zarr(
+    #     chunk_data,
+    #     [z_range[0], 0, 0],
+    #     get_ome_zarr_handle(ome_zarr_filepath, mode='a'),
+    #     key='s0',
+    #     populate_downsample_layers=True,
+    #     verbose=verbose
+    # )
 
 
 def ome_zarr_to_stack_workflow(

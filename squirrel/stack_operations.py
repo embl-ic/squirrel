@@ -176,92 +176,6 @@ def adjust_greyscale():
     )
 
 
-# def clahe_on_stack():
-#
-#     # ----------------------------------------------------
-#     import argparse
-#
-#     parser = argparse.ArgumentParser(
-#         description='Runs a clahe filtering on an image stack (slice-wise)',
-#         formatter_class=argparse.RawTextHelpFormatter
-#     )
-#     parser.add_argument('in_path', type=str,
-#                         help='Input folder containing a tif stack or filepath of h5 container')
-#     parser.add_argument('out_path', type=str,
-#                         help='Output folder for tif stack or filepath for h5 container where the results will '
-#                              'be written to')
-#     parser.add_argument('--clip_limit', type=float, default=3.0,
-#                         help='CLAHE parameter; default=3.0')
-#     parser.add_argument('--tile_grid_size', type=int, nargs=2, default=(63, 63),
-#                         help='CLAHE parameter; default=(63, 63)')
-#     parser.add_argument('--in_pattern', type=str, default='*.tif',
-#                         help='File patter to search for within the input folder; default = "*.tif"; used if in_path is '
-#                              'tif stack')
-#     parser.add_argument('--in_key', type=str, default='data',
-#                         help='Internal path of the input dataset; default="data"; used if in_path is h5 filepath')
-#     parser.add_argument('--out_key', type=str, default='data',
-#                         help='Internal path of the output dataset; default="data"; used if out_path is h5 filepath')
-#     parser.add_argument('--cast_dtype', type=str, default=None,
-#                         help='If set, the data-type will be casted accordingly, '
-#                              'including adjustment of the greyscale values; default=None (no dtype casting)')
-#     parser.add_argument('--invert_output', action='store_true',
-#                         help='Inverts the output')
-#     parser.add_argument('--gaussian_sigma', type=float, default=0.0,
-#                         help='If > 0, the output will be smoothed by a 2D gaussian filter; default=0.0')
-#     parser.add_argument('--auto_mask', action='store_true',
-#                         help='Limits CLAHE filtering to the masked area; mask is created by image > 0')
-#     parser.add_argument('--background_to_mean', action='store_true',
-#                         help='The background is set to the mean value of the masked region '
-#                              '(entire image if auto mask is off)')
-#     parser.add_argument('--tile_grid_in_pixels', action='store_true',
-#                         help='By default tile grid size describes the numbers of tiles in each dimension. '
-#                              'If tile_grid_in_pixels=True, tile grid size is the size of each tile in pixels')
-#     parser.add_argument('--batch_size', type=int, default=None,
-#                         help='Will process and write data in batches (more memory efficient); default=None')
-#     parser.add_argument('--n_workers', type=int, default=1,
-#                         help='The number of cores to use for processing')
-#     parser.add_argument('-v', '--verbose', action='store_true')
-#
-#     args = parser.parse_args()
-#     in_path = args.in_path
-#     out_path = args.out_path
-#     clip_limit = args.clip_limit
-#     tile_grid_size = args.tile_grid_size
-#     in_pattern = args.in_pattern
-#     in_key = args.in_key
-#     out_key = args.out_key
-#     cast_dtype = args.cast_dtype
-#     invert_output = args.invert_output
-#     gaussian_sigma = args.gaussian_sigma
-#     auto_mask = args.auto_mask
-#     background_to_mean = args.background_to_mean
-#     tile_grid_in_pixels = args.tile_grid_in_pixels
-#     batch_size = args.batch_size
-#     n_workers = args.n_workers
-#     verbose = args.verbose
-#
-#     from squirrel.workflows.normalization import clahe_on_slices_workflow
-#
-#     clahe_on_slices_workflow(
-#         in_path,
-#         out_path,
-#         clip_limit=clip_limit,
-#         tile_grid_size=tile_grid_size,
-#         in_pattern=in_pattern,
-#         in_key=in_key,
-#         out_key=out_key,
-#         cast_dtype=cast_dtype,
-#         invert_output=invert_output,
-#         gaussian_sigma=gaussian_sigma,
-#         auto_mask=auto_mask,
-#         background_to_mean=background_to_mean,
-#         tile_grid_in_pixels=tile_grid_in_pixels,
-#         n_workers=n_workers,
-#         batch_size=batch_size,
-#         verbose=verbose
-#     )
-
-
 def merge_tif_stacks():
 
     # ----------------------------------------------------
@@ -285,6 +199,11 @@ def merge_tif_stacks():
     parser.add_argument('--inconsistent_shapes', action='store_true',
                         help='Enable this if tif slices within one stack may have different shapes;'
                              'This setting massively increases computation time!')
+    parser.add_argument('--add_shifts', type=str, nargs='+', default=None,
+                        help='Add a shift to each stack, supply two values for each stack separated by comma; '
+                             'default=None\n'
+                             'Example: --add_shifts "0,0" "10,20" "(-20,30)"\n'
+                             'Note: for negative values you must use parenthesis')
     parser.add_argument('-v', '--verbose', action='store_true')
 
     args = parser.parse_args()
@@ -294,7 +213,10 @@ def merge_tif_stacks():
     out_pattern = args.out_pattern
     pad_canvas = args.pad_canvas
     inconsistent_shapes = args.inconsistent_shapes
+    add_shifts = args.add_shifts
     verbose = args.verbose
+
+    add_shifts = [[int(n) for n in s.strip("()").split(",")] for s in add_shifts]
 
     from squirrel.workflows.convert import merge_tif_stacks_workflow
 
@@ -305,6 +227,7 @@ def merge_tif_stacks():
         out_pattern=out_pattern,
         pad_canvas=pad_canvas,
         inconsistent_shapes=inconsistent_shapes,
+        add_shifts=add_shifts,
         verbose=verbose
     )
 
@@ -358,8 +281,9 @@ def crop_from_stack():
                              'Will be created if not existing')
     parser.add_argument('--roi', type=int, nargs=6, default=None,
                         metavar=('Z', 'Y', 'X', 'D', 'H', 'W'),
-                        # metavar=('Z', 'Y', 'X', 'depth', 'height', 'width'),
-                        help='Region of interest to crop, given in voxels')
+                        help='Region of interest to crop, given in voxels\n'
+                             'If "D", "H", or "W" is set to 0, the full extent along the respective axis will be used\n'
+                             'default=None which will be interpreted as using the full stack')
     parser.add_argument('--key', type=str, default='data',
                         help='For h5 or ome.zarr input stacks this key is used to locate the dataset inside the stack '
                              'location')

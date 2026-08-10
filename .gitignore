@@ -239,6 +239,6 @@ fabric.properties
 
 .idea
 
-# VS Code
+# vscode
 .vscode/
 settings.json

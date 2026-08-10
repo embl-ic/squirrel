@@ -41,6 +41,7 @@ setup(
             'sq-elastix-stack_alignment_validation = squirrel.elastix_registration:stack_alignment_validation',
             'sq-elastix-make_default_parameter_file = squirrel.elastix_registration:make_elastix_default_parameter_file',
             'sq-elastix-apply_multi_step_stack_alignment = squirrel.elastix_registration:apply_multi_step_stack_alignment',
+            'sq-elastix-get_elastix_transforms_substack = squirrel.elastix_registration:get_elastix_transforms_substack',
             'sq-image-filter_2d_workflow = squirrel.image_operations:filter_2d',
             'sq-linalg-dot_product_on_affines = squirrel.linear_algebra:dot_product_on_affines',
             'sq-linalg-scale_sequential_affines = squirrel.linear_algebra:scale_sequential_affines',
@@ -55,6 +56,8 @@ setup(
             'sq-mobie-init_project = squirrel.mobie:init_mobie_project',
             'sq-mobie-export_rois_with_mobie_table = squirrel.mobie:export_rois_with_mobie_table',
             'sq-napari-view = squirrel.napari:view',
+            'sq-oz-create_ome_zarr = squirrel.ome_zarr:create_ome_zarr',
+            'sq-oz-data_to_ome_zarr = squirrel.ome_zarr:data_to_ome_zarr',
             'sq-serialem-parse_navigator_file = squirrel.serial_em:parse_navigator_file',
             'sq-serialem-create_link_maps = squirrel.serial_em:create_link_maps',
             'sq-stack-axis_median_filter = squirrel.stack_operations:axis_median_filter',
@@ -72,7 +75,8 @@ setup(
             'sq-stack-merge_tif_stacks = squirrel.stack_operations:merge_tif_stacks',
             'sq-stack-to_consistent_shapes = squirrel.stack_operations:stack_to_consistent_shapes',
             'sq-transform-apply_stack_alignment = squirrel.transformation:apply_stack_alignment',
-            'sq-transform-apply_auto_pad = squirrel.transformation:apply_auto_pad'
+            'sq-transform-apply_auto_pad = squirrel.transformation:apply_auto_pad',
+            'sq-transform-get_affine_transforms_substack = squirrel.transformation:get_affine_transforms_substack'
         ]
     },
     install_requires=[

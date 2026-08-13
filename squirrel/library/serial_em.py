@@ -1027,7 +1027,7 @@ class SingleParticleNavigator(Navigator):
 
     def _get_map_filepath(self, map_type, key, item):
         fp = super()._get_map_filepath(item)
-        print(fp)
+        # print(fp)
         if map_type == 'grid':
             return self._get_grid_map_filepath(fp, item)
         if map_type == 'search':
@@ -1281,7 +1281,7 @@ class TomoCLEMNavigator(Navigator):
 
     def _get_map_filepath(self, map_type, key, item):
         fp = super()._get_map_filepath(item)
-        print(fp)
+        # print(fp)
         if map_type == 'grid':
             return self._get_grid_map_filepath(fp)
         if map_type == 'lamella':

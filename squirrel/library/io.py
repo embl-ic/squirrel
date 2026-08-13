@@ -190,6 +190,13 @@ def get_filetype(filepath):
 #     return h[idx], None
 
 
+def get_mrc_shape(path):
+    import mrcfile
+    with mrcfile.open(path, header_only=True) as mrc:
+        h = mrc.header
+        return int(h.nz), int(h.ny), int(h.nx)
+
+
 def get_reshaped_data(h, idx, shape):
     """
     :param h:

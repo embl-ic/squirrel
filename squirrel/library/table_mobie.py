@@ -21,8 +21,6 @@ def get_mobie_table_path(project_path):
 
 def normalize_mobie_table_entry_dict(entries, entry_count=None, use_abs_path=False, table_filepath=None):
 
-    print(f'table_filepath = {table_filepath}')
-
     def _normalize_uri(uri):
         if use_abs_path:
             return os.path.abspath(uri)

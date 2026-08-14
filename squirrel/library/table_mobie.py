@@ -23,11 +23,14 @@ def normalize_mobie_table_entry_dict(entries, entry_count=None, use_abs_path=Fal
 
     def _normalize_uri(uri):
         if use_abs_path:
-            uri = os.path.abspath(uri)
-        else:
-            assert table_filepath is not None
-            uri = os.path.relpath(uri, os.path.split(table_filepath)[0])
-        return uri
+            return os.path.abspath(uri)
+
+        assert table_filepath is not None
+
+        table_dir = os.path.dirname(os.path.abspath(table_filepath))
+        uri = os.path.abspath(uri)
+
+        return os.path.relpath(uri, table_dir)
 
     def _normalize_affine(affine):
         return ','.join([str(x) for x in affine])

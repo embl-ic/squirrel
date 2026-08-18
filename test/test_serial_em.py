@@ -3085,26 +3085,33 @@ class TestNavigatorProfileDiscovery(unittest.TestCase):
                 'view',
             )
 
-
     def test_discover_items_none_search_string(self):
         print(
             'Testing NavigatorProfile: '
             'discover_items None search string ...'
         )
 
+        class TestProfile(NavigatorProfile):
+            MAP_TYPES = ('grid',)
+            SEARCH_STRINGS = {
+                'grid': None,
+            }
+            MAP_BINNINGS = {
+                'grid': 1,
+            }
+
         navigator = DummyNavigator(
             filepath='/data/test.nav',
             nav_dict={'items': {}},
         )
 
-        profile = TomoCLEMProfile()
+        profile = TestProfile()
 
         with self.assertRaises(NotImplementedError):
             profile.discover_items(
                 navigator,
                 'grid',
             )
-
 
     def test_source_filepath(self):
         print(
@@ -3771,7 +3778,139 @@ class TestNavigatorMapAPI(unittest.TestCase):
             ],
         )
 
+    def test_add_maps_new_map_type(self):
+        print(
+            'Testing Navigator: '
+            'add_maps new map type ...'
+        )
 
+        nav = Navigator.__new__(Navigator)
+
+        nav.profile = TomoCLEMProfile()
+        nav.maps = MapCollection()
+        nav.hierarchy = MapHierarchy(
+            nav.profile.map_types
+        )
+
+        target = NavigatorMap(
+            id='tgt1',
+            map_type='tgt',
+            serialem_item={},
+            source_filepath='tgt1.mrc',
+            filepath='tgt1.mrc',
+        )
+
+        nav.maps.add(target)
+        nav.hierarchy.add_node(
+            'tgt',
+            'tgt1',
+        )
+
+        tomo = NavigatorMap(
+            id='tomo1',
+            map_type='tomo',
+            serialem_item={},
+            source_filepath='tomo1.mrc',
+            filepath='tomo1.mrc',
+        )
+
+        nav.add_maps(
+            'tomo',
+            [tomo],
+            parent_map_type='tgt',
+        )
+
+        self.assertIn(
+            'tomo',
+            nav.map_types,
+        )
+
+        self.assertIs(
+            nav.get_map(
+                'tomo',
+                'tomo1',
+            ),
+            tomo,
+        )
+
+        self.assertIn(
+            ('tomo', 'tomo1'),
+            nav.hierarchy._nodes,
+        )
+
+    def test_remove_map_type(self):
+        print(
+            'Testing Navigator: '
+            'remove_map_type ...'
+        )
+
+        nav = Navigator.__new__(Navigator)
+
+        nav.profile = TomoCLEMProfile()
+        nav.maps = MapCollection()
+        nav.hierarchy = MapHierarchy(
+            nav.profile.map_types
+        )
+
+        target = NavigatorMap(
+            id='tgt1',
+            map_type='tgt',
+            serialem_item={},
+            source_filepath='tgt1.mrc',
+            filepath='tgt1.mrc',
+        )
+
+        nav.maps.add(target)
+        nav.hierarchy.add_node(
+            'tgt',
+            'tgt1',
+        )
+
+        tomo = NavigatorMap(
+            id='tomo1',
+            map_type='tomo',
+            serialem_item={},
+            source_filepath='tomo1.mrc',
+            filepath='tomo1.mrc',
+        )
+
+        nav.add_maps(
+            'tomo',
+            [tomo],
+            parent_map_type='tgt',
+        )
+
+        nav.hierarchy.add_relation(
+            'tgt',
+            'tgt1',
+            'tomo',
+            'tomo1',
+        )
+
+        nav.remove_map_type(
+            'tomo'
+        )
+
+        self.assertNotIn(
+            'tomo',
+            nav.map_types,
+        )
+
+        self.assertEqual(
+            nav.get_map_ids('tomo'),
+            [],
+        )
+
+        self.assertEqual(
+            nav.hierarchy.map_type_order,
+            [
+                'grid',
+                'lamella',
+                'view',
+                'tgt',
+            ],
+        )
+        
 class TestSingleParticleProfile(unittest.TestCase):
 
     def setUp(self):
@@ -4903,10 +5042,10 @@ class TestNavigatorAffineAPI(unittest.TestCase):
         )
 
         expected = np.array([
-            [1, 0, 0, 110],
-            [0, 1, 0, 70],
-            [0, 0, 1,   0],
-            [0, 0, 0,   1],
+            [1, 0, 0, 90],
+            [0, 1, 0, 30],
+            [0, 0, 1,  0],
+            [0, 0, 0,  1],
         ], dtype=float)
 
         self.assertTrue(
@@ -4982,77 +5121,77 @@ class TestNavigatorAffineAPI(unittest.TestCase):
             (16,),
         ) 
 
-    # def test_get_map_full_affines_grid_identity(self):
-    #     print(
-    #         'Testing Navigator: '
-    #         'get_map_full_affines grid identity ...'
-    #     )
+    def test_get_map_full_affines_grid_identity(self):
+        print(
+            'Testing Navigator: '
+            'get_map_full_affines grid identity ...'
+        )
 
-    #     result = self.nav.get_map_full_affines(
-    #         'grid',
-    #         stage_coordinate_system=False,
-    #     )
+        result = self.nav.get_map_full_affines(
+            'grid',
+            stage_coordinate_system=False,
+        )
 
-    #     affine = result[
-    #         'grid1'
-    #     ].reshape(4, 4)
+        affine = result[
+            'grid1'
+        ].reshape(4, 4)
 
-    #     self.assertTrue(
-    #         np.allclose(
-    #             affine,
-    #             np.eye(4),
-    #             atol=1e-6,
-    #         )
-    #     )
+        self.assertTrue(
+            np.allclose(
+                affine,
+                np.eye(4),
+                atol=1e-6,
+            )
+        )
 
-    # def test_get_map_full_affines_relative_to_grid(self):
-    #     print(
-    #         'Testing Navigator: '
-    #         'get_map_full_affines relative to grid ...'
-    #     )
+    def test_get_map_full_affines_relative_to_grid(self):
+        print(
+            'Testing Navigator: '
+            'get_map_full_affines relative to grid ...'
+        )
 
-    #     search = NavigatorMap(
-    #         id='search1',
-    #         map_type='search',
-    #         serialem_item={
-    #             'StageXYZ': '20 30 0',
-    #             'MapScaleMat': '1 0 0 1',
-    #         },
-    #         source_filepath='search.mrc',
-    #         filepath='search.mrc',
-    #         shape=(1, 100, 200),
-    #         resolution=np.array([
-    #             1.0,
-    #             1.0,
-    #             1.0,
-    #         ]),
-    #     )
+        search = NavigatorMap(
+            id='search1',
+            map_type='search',
+            serialem_item={
+                'StageXYZ': '20 30 0',
+                'MapScaleMat': '1 0 0 1',
+            },
+            source_filepath='search.mrc',
+            filepath='search.mrc',
+            shape=(1, 100, 200),
+            resolution=np.array([
+                1.0,
+                1.0,
+                1.0,
+            ]),
+        )
 
-    #     self.nav.maps.add(
-    #         search
-    #     )
+        self.nav.maps.add(
+            search
+        )
 
-    #     result = self.nav.get_map_full_affines(
-    #         'search',
-    #         stage_coordinate_system=False,
-    #     )
+        result = self.nav.get_map_full_affines(
+            'search',
+            stage_coordinate_system=False,
+        )
 
-    #     affine = result[
-    #         'search1'
-    #     ].reshape(4, 4)
+        affine = result[
+            'search1'
+        ].reshape(4, 4)
 
-    #     expected = np.eye(4)
+        expected = np.eye(4)
 
-    #     expected[0, 3] = 10
-    #     expected[1, 3] = 10
+        expected[0, 3] = 10
+        expected[1, 3] = 10
 
-    #     self.assertTrue(
-    #         np.allclose(
-    #             affine,
-    #             expected,
-    #             atol=1e-6,
-    #         )
-    #     )
+        self.assertTrue(
+            np.allclose(
+                affine,
+                expected,
+                atol=1e-6,
+            )
+        )
 
     def test_get_map_affine_anisotropic_xy(self):
         print(
@@ -5072,6 +5211,738 @@ class TestNavigatorAffineAPI(unittest.TestCase):
                 'grid1',
             )
 
+
+class TestTomoCLEMProfile(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter(
+            'ignore',
+            category=Warning,
+        )
+
+    def test_discover_grid(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'discover grid ...'
+        )
+
+        navigator = DummyNavigator(
+            filepath='/data/nav/test.nav',
+            nav_dict={
+                'items': {
+                    'grid1': {
+                        'MapFile': 'gridmap.st',
+                    },
+                    'lamella1': {
+                        'MapFile': 'L_01.map',
+                    },
+                },
+            },
+        )
+
+        profile = TomoCLEMProfile()
+
+        result = profile.discover_items(
+            navigator,
+            'grid',
+        )
+
+        self.assertEqual(
+            list(result),
+            ['grid1'],
+        )
+
+    def test_discover_lamella(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'discover lamella ...'
+        )
+
+        navigator = DummyNavigator(
+            filepath='/data/nav/test.nav',
+            nav_dict={
+                'items': {
+                    '1': {
+                        'MapFile': 'L_01.map',
+                    },
+                    '2': {
+                        'MapFile': 'L_02.map',
+                    },
+                    '3': {
+                        'MapFile': 'L01_tgt_001_view.mrc',
+                    },
+                },
+            },
+        )
+
+        profile = TomoCLEMProfile()
+
+        result = profile.discover_items(
+            navigator,
+            'lamella',
+        )
+
+        self.assertEqual(
+            list(result),
+            [
+                '1',
+                '2',
+            ],
+        )
+
+    def test_resolve_grid_filepath(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'resolve grid filepath ...'
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            source_filepath = (
+                tmpdir / 'gridmap.st'
+            )
+
+            expected = (
+                tmpdir
+                / 'gridmap_stitched_grid01_bin8.mrc'
+            )
+
+            expected.touch()
+
+            navigator = DummyNavigator(
+                filepath=tmpdir / 'test.nav',
+                nav_dict={},
+            )
+
+            profile = TomoCLEMProfile()
+
+            result = profile.resolve_grid_filepath(
+                navigator,
+                source_filepath,
+            )
+
+            self.assertEqual(
+                result,
+                expected,
+            )
+
+    def test_resolve_lamella_filepath(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'resolve lamella filepath ...'
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            source_filepath = (
+                tmpdir / 'L_01.map'
+            )
+
+            expected = (
+                tmpdir
+                / 'L_01_stitched_grid01_bin8.mrc'
+            )
+
+            expected.touch()
+
+            navigator = DummyNavigator(
+                filepath=tmpdir / 'test.nav',
+                nav_dict={},
+            )
+
+            profile = TomoCLEMProfile()
+
+            result = profile.resolve_lamella_filepath(
+                navigator,
+                source_filepath,
+            )
+
+            self.assertEqual(
+                result,
+                expected,
+            )
+
+    def test_resolve_view_filepath_same_directory(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'resolve view same directory ...'
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            nav_dir = tmpdir / 'nav'
+            nav_dir.mkdir()
+
+            expected = (
+                nav_dir
+                / 'L01_tgt_001_view.mrc'
+            )
+            expected.touch()
+
+            navigator = DummyNavigator(
+                filepath=nav_dir / 'test.nav',
+                nav_dict={},
+            )
+
+            profile = TomoCLEMProfile()
+
+            result = profile.resolve_view_filepath(
+                navigator,
+                Path(
+                    '/some/old/path/'
+                    'L01_tgt_001_view.mrc'
+                ),
+            )
+
+            self.assertEqual(
+                result,
+                expected,
+            )
+
+    def test_resolve_view_filepath_pace(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'resolve view pace ...'
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            nav_dir = tmpdir / 'nav'
+            pace_dir = tmpdir / 'pace'
+
+            nav_dir.mkdir()
+            pace_dir.mkdir()
+
+            expected = (
+                pace_dir
+                / 'L01_tgt_001_view.mrc'
+            )
+            expected.touch()
+
+            navigator = DummyNavigator(
+                filepath=nav_dir / 'test.nav',
+                nav_dict={},
+            )
+
+            profile = TomoCLEMProfile()
+
+            result = profile.resolve_view_filepath(
+                navigator,
+                Path(
+                    '/some/old/path/'
+                    'L01_tgt_001_view.mrc'
+                ),
+            )
+
+            self.assertEqual(
+                result,
+                expected,
+            )
+
+    def test_resolve_target_filepath_missing(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'resolve missing target filepath ...'
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            nav_dir = tmpdir / 'nav'
+            nav_dir.mkdir()
+
+            navigator = DummyNavigator(
+                filepath=nav_dir / 'test.nav',
+                nav_dict={},
+            )
+
+            profile = TomoCLEMProfile()
+
+            result = profile.resolve_target_filepath(
+                navigator,
+                Path(
+                    '/some/old/path/'
+                    'L01_tgt_001.mrc'
+                ),
+            )
+
+            self.assertEqual(
+                result,
+                tmpdir
+                / 'pace'
+                / 'L01_tgt_001.mrc',
+            )
+
+    def test_build_relationships(self):
+        print(
+            'Testing TomoCLEMProfile: '
+            'build_relationships ...'
+        )
+
+        nav = Navigator.__new__(
+            Navigator
+        )
+
+        nav.maps = MapCollection()
+
+        grid = NavigatorMap(
+            id='grid1',
+            map_type='grid',
+            serialem_item={
+                'MapFile': 'gridmap.st',
+            },
+            source_filepath='grid.mrc',
+            filepath='grid.mrc',
+        )
+
+        lamella = NavigatorMap(
+            id='lamella1',
+            map_type='lamella',
+            serialem_item={
+                'MapFile': 'L_01.map',
+            },
+            source_filepath='lamella.mrc',
+            filepath='lamella.mrc',
+        )
+
+        view = NavigatorMap(
+            id='view1',
+            map_type='view',
+            serialem_item={
+                'MapFile': 'L01_tgt_001_view.mrc',
+            },
+            source_filepath='view.mrc',
+            filepath='view.mrc',
+        )
+
+        target = NavigatorMap(
+            id='target1',
+            map_type='tgt',
+            serialem_item={
+                'MapFile': 'L01_tgt_001.mrc',
+            },
+            source_filepath='target.mrc',
+            filepath='target.mrc',
+        )
+
+        nav.maps.add_many([
+            grid,
+            lamella,
+            view,
+            target,
+        ])
+
+        nav.nav_dict = {
+            'items': {},
+        }
+
+        profile = TomoCLEMProfile()
+        nav.profile = profile
+
+        nav._build_hierarchy()
+
+        self.assertIs(
+            nav.get_parent(
+                'lamella',
+                'lamella1',
+            ),
+            grid,
+        )
+
+        self.assertIs(
+            nav.get_parent(
+                'view',
+                'view1',
+            ),
+            lamella,
+        )
+
+        self.assertIs(
+            nav.get_parent(
+                'tgt',
+                'target1',
+            ),
+            view,
+        )
+
+        result = [
+            map_.id
+            for map_, idx_path in nav
+        ]
+
+        self.assertEqual(
+            result,
+            [
+                'grid1',
+                'lamella1',
+                'view1',
+                'target1',
+            ],
+        )
+        
+
+class TestNavigatorTomograms(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter(
+            'ignore',
+            category=Warning,
+        )
+
+    def _create_mrc(
+        self,
+        filepath,
+        shape=(5, 20, 30),
+    ):
+        import mrcfile
+
+        data = np.zeros(
+            shape,
+            dtype=np.float32,
+        )
+
+        with mrcfile.new(
+            filepath,
+            overwrite=True,
+        ) as mrc:
+            mrc.set_data(data)
+
+    def _create_nav(self):
+
+        nav = Navigator.__new__(
+            Navigator
+        )
+
+        nav.profile = TomoCLEMProfile()
+        nav.maps = MapCollection()
+
+        nav.hierarchy = MapHierarchy(
+            nav.profile.map_types
+        )
+
+        nav.nav_dict = {
+            'items': {},
+        }
+
+        grid = NavigatorMap(
+            id='grid1',
+            map_type='grid',
+            serialem_item={},
+            source_filepath='grid.mrc',
+            filepath='grid.mrc',
+        )
+
+        lamella = NavigatorMap(
+            id='lamella1',
+            map_type='lamella',
+            serialem_item={},
+            source_filepath='lamella.mrc',
+            filepath='lamella.mrc',
+        )
+
+        view = NavigatorMap(
+            id='view1',
+            map_type='view',
+            serialem_item={},
+            source_filepath='view.mrc',
+            filepath='view.mrc',
+        )
+
+        tgt1 = NavigatorMap(
+            id='tgt1',
+            map_type='tgt',
+            serialem_item={
+                'MapFile': 'L01_tgt_001.mrc',
+                'MapScaleMat': '1 0 0 1',
+                'StageXYZ': '10 20 0',
+            },
+            source_filepath='tgt1.mrc',
+            filepath='tgt1.mrc',
+            resolution=np.array([
+                0.001,
+                0.001,
+                0.001,
+            ]),
+        )
+
+        tgt2 = NavigatorMap(
+            id='tgt2',
+            map_type='tgt',
+            serialem_item={
+                'MapFile': 'L01_tgt_002.mrc',
+                'MapScaleMat': '2 0 0 2',
+                'StageXYZ': '30 40 0',
+            },
+            source_filepath='tgt2.mrc',
+            filepath='tgt2.mrc',
+            resolution=np.array([
+                0.002,
+                0.002,
+                0.002,
+            ]),
+        )
+
+        nav.maps.add_many([
+            grid,
+            lamella,
+            view,
+            tgt1,
+            tgt2,
+        ])
+
+        for map_ in nav.maps:
+            nav.hierarchy.add_node(
+                map_.map_type,
+                map_.id,
+            )
+
+        nav.hierarchy.add_relation(
+            'grid',
+            'grid1',
+            'lamella',
+            'lamella1',
+        )
+
+        nav.hierarchy.add_relation(
+            'lamella',
+            'lamella1',
+            'view',
+            'view1',
+        )
+
+        nav.hierarchy.add_relation(
+            'view',
+            'view1',
+            'tgt',
+            'tgt1',
+        )
+
+        nav.hierarchy.add_relation(
+            'view',
+            'view1',
+            'tgt',
+            'tgt2',
+        )
+
+        return nav
+
+    def test_add_tomograms(self):
+        print(
+            'Testing Navigator: '
+            'add_tomograms ...'
+        )
+
+        nav = self._create_nav()
+
+        tgt1 = nav.get_map(
+            'tgt',
+            'tgt1',
+        )
+
+        tgt2 = nav.get_map(
+            'tgt',
+            'tgt2',
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            tomo1_filepath = (
+                tmpdir
+                / 'L01_ts_001.mrc'
+            )
+
+            tomo2_filepath = (
+                tmpdir
+                / 'L01_ts_002.mrc'
+            )
+
+            self._create_mrc(
+                tomo1_filepath,
+                shape=(5, 20, 30),
+            )
+
+            self._create_mrc(
+                tomo2_filepath,
+                shape=(7, 40, 50),
+            )
+
+            nav.add_tomograms(
+                tmpdir
+            )
+
+            tomo1 = nav.get_map(
+                'tomo',
+                '0',
+            )
+
+            tomo2 = nav.get_map(
+                'tomo',
+                '1',
+            )
+
+            self.assertEqual(
+                nav.get_parent(
+                    'tomo',
+                    '0',
+                ).id,
+                'tgt1',
+            )
+
+            self.assertEqual(
+                nav.get_parent(
+                    'tomo',
+                    '1',
+                ).id,
+                'tgt2',
+            )
+
+            self.assertEqual(
+                tomo1.get_serialem_value(
+                    'MapScaleMat'
+                ),
+                '1 0 0 1',
+            )
+
+            self.assertEqual(
+                tomo1.get_serialem_value(
+                    'StageXYZ'
+                ),
+                '10 20 0',
+            )
+
+            self.assertTrue(
+                np.allclose(
+                    tomo1.resolution,
+                    tgt1.resolution,
+                )
+            )
+
+            self.assertTrue(
+                np.allclose(
+                    tomo2.resolution,
+                    tgt2.resolution,
+                )
+            )
+
+            self.assertEqual(
+                tomo1.shape,
+                (
+                    5,
+                    20,
+                    30,
+                ),
+            )
+
+            self.assertEqual(
+                tomo2.shape,
+                (
+                    7,
+                    40,
+                    50,
+                ),
+            )
+
+    def test_add_tomograms_hierarchy_order(self):
+        print(
+            'Testing Navigator: '
+            'add_tomograms hierarchy order ...'
+        )
+
+        nav = self._create_nav()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            self._create_mrc(
+                tmpdir / 'L01_ts_001.mrc',
+                shape=(5, 20, 30),
+            )
+
+            self._create_mrc(
+                tmpdir / 'L01_ts_002.mrc',
+                shape=(7, 40, 50),
+            )
+
+            nav.add_tomograms(
+                tmpdir
+            )
+
+            result = [
+                (
+                    map_.map_type,
+                    map_.id,
+                    idx_path,
+                )
+                for map_, idx_path in nav
+            ]
+
+        expected = [
+            ('grid', 'grid1', [0]),
+            ('lamella', 'lamella1', [0, 0]),
+            ('view', 'view1', [0, 0, 0]),
+            ('tgt', 'tgt1', [0, 0, 0, 0]),
+            ('tomo', '0', [0, 0, 0, 0, 0]),
+            ('tgt', 'tgt2', [0, 0, 0, 1]),
+            ('tomo', '1', [0, 0, 0, 1, 0]),
+        ]
+
+        self.assertEqual(
+            result,
+            expected,
+        )
+        print(
+            'Testing Navigator: '
+            'add_tomograms hierarchy order ...'
+        )
+
+        nav = self._create_nav()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            self._create_mrc(
+                tmpdir / 'L01_ts_001.mrc',
+                shape=(5, 20, 30),
+            )
+
+            self._create_mrc(
+                tmpdir / 'L01_ts_002.mrc',
+                shape=(7, 40, 50),
+            )
+
+            nav.add_tomograms(
+                tmpdir
+            )
+
+            result = [
+                (
+                    map_.map_type,
+                    map_.id,
+                    idx_path,
+                )
+                for map_, idx_path in nav
+            ]
+
+        expected = [
+            ('grid', 'grid1', [0]),
+            ('lamella', 'lamella1', [0, 0]),
+            ('view', 'view1', [0, 0, 0]),
+            ('tgt', 'tgt1', [0, 0, 0, 0]),
+            ('tomo', '0', [0, 0, 0, 0, 0]),
+            ('tgt', 'tgt2', [0, 0, 0, 1]),
+            ('tomo', '1', [0, 0, 0, 1, 0]),
+        ]
+
+        self.assertEqual(
+            result,
+            expected,
+        )
+        
 
 if __name__ == '__main__':
     unittest.main()

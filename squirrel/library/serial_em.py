@@ -777,6 +777,26 @@ class MapHierarchy:
             if map_type not in self._map_type_order:
                 raise ValueError(f'Unknown node map type: "{map_type}"')
 
+    def remove_map_type(self, map_type: str) -> None:
+        if map_type not in self._map_type_order:
+            raise ValueError(f'Unknown map type: "{map_type}"')
+        if map_type != self._map_type_order[-1]:
+            raise ValueError("Only the final hierarchy map type can be removed.")
+
+        nodes = [node for node in self._nodes if node[0] == map_type]
+
+        for node in nodes:
+            if node in self._parent:
+                parent = self._parent.pop(node)
+                if parent in self._children:
+                    self._children[parent].remove(node)
+                    if not self._children[parent]:
+                        del self._children[parent]
+
+            self._children.pop(node, None)
+            self._nodes.pop(node, None)
+
+        self._map_type_order.remove(map_type)
 
 # ============================================================================
 # Workflow / acquisition profile
@@ -973,6 +993,15 @@ class NavigatorProfile:
 
                 hierarchy.add_relation(parent_type, matching_parent_ids[0], child_type, child_map.id)
 
+    def add_map_type(self, map_type: str) -> None:
+        if map_type in self._map_types:
+            raise ValueError(f'Map type already active: "{map_type}"')
+        self._map_types.append(map_type)
+
+    def remove_map_type(self, map_type: str) -> None:
+        if map_type not in self._map_types:
+            raise ValueError(f'Unknown map type: "{map_type}"')
+        self._map_types.remove(map_type)
 
 # ============================================================================
 # Single-particle workflow
@@ -1215,17 +1244,53 @@ class TomoCLEMProfile(NavigatorProfile):
 
     MATCH_RULES = {
         "view": {
-            "lamella": MatchRule("MapFile", r"L_(\d{2})"),
-            "view": MatchRule("MapFile", r"L(\d{2})"),
+            "lamella": MatchRule(
+                "MapFile",
+                r"L_(\d{2})",
+            ),
+            "view": MatchRule(
+                "MapFile",
+                r"L(\d{2})",
+            ),
         },
         "tgt": {
-            "view": MatchRule("MapFile", r"L(\d{2})_tgt_(\d{3})"),
-            "tgt": MatchRule("MapFile", r"L(\d{2})_tgt_(\d{3})"),
+            "view": MatchRule(
+                "MapFile",
+                r"L(\d{2})_tgt_(\d{3})",
+            ),
+            "tgt": MatchRule(
+                "MapFile",
+                r"L(\d{2})_tgt_(\d{3})",
+            ),
         },
     }
 
-    def discover_items(self, navigator: "Navigator", map_type: str) -> dict[str, dict]:
-        return super().discover_items(navigator, map_type)
+    def discover_items(self,navigator: "Navigator",map_type: str) -> dict[str, dict]:
+
+        if map_type not in self._map_types:
+            raise ValueError(f'Inactive map type: "{map_type}"')
+        
+        if map_type != "grid":
+            return super().discover_items(navigator, map_type)
+
+        search_string = self._search_strings["grid"]
+        if search_string is not None:
+            return super().discover_items(navigator, map_type)
+
+        if not navigator.nav_dict["items"]:
+            raise ValueError("Navigator contains no items.")
+
+        map_id = next(iter(navigator.nav_dict["items"]))
+        item = navigator.nav_dict["items"][map_id]
+        if "MapFile" not in item:
+            raise ValueError("First Navigator item does not contain MapFile.")
+
+        map_file = str(item["MapFile"]).lower()
+
+        if not (map_file.endswith(".mrc") or map_file.endswith(".st")):
+            raise ValueError(f'Grid MapFile must end with ".mrc" or ".st". Found: "{item["MapFile"]}"')
+
+        return {map_id: item}
 
     def resolve_filepath(
         self,
@@ -1235,42 +1300,99 @@ class TomoCLEMProfile(NavigatorProfile):
         item: Mapping[str, Any],
         source_filepath: Path,
     ) -> Path:
-        pass
 
-    def resolve_grid_filepath(
-        self,
-        navigator: "Navigator",
-        source_filepath: Path,
-    ) -> Path:
-        pass
+        if map_type == "grid":
+            return self.resolve_grid_filepath(navigator, source_filepath)
+        if map_type == "lamella":
+            return self.resolve_lamella_filepath(navigator, source_filepath)
+        if map_type == "view":
+            return self.resolve_view_filepath(navigator, source_filepath)
+        if map_type == "tgt":
+            return self.resolve_target_filepath(navigator, source_filepath)
 
-    def resolve_lamella_filepath(
-        self,
-        navigator: "Navigator",
-        source_filepath: Path,
-    ) -> Path:
-        pass
+        return super().resolve_filepath(
+            navigator,
+            map_type,
+            map_id,
+            item,
+            source_filepath,
+        )
 
-    def resolve_view_filepath(
-        self,
-        navigator: "Navigator",
-        source_filepath: Path,
-    ) -> Path:
-        pass
+    def resolve_grid_filepath(self, navigator: "Navigator", source_filepath: Path) -> Path:
 
-    def resolve_target_filepath(
-        self,
-        navigator: "Navigator",
-        source_filepath: Path,
-    ) -> Path:
-        pass
+        binning = self._map_binnings["grid"]
+        parent_filepath = self._stitched_dirpath if self._stitched_dirpath is not None else source_filepath.parent
+        filepath = parent_filepath / f"{source_filepath.stem}_stitched_grid01_bin{binning}{source_filepath.suffix}"
 
-    def build_relationships(
-        self,
-        navigator: "Navigator",
-        hierarchy: MapHierarchy,
-    ) -> None:
-        pass
+        if filepath.exists():
+            return filepath
+
+        if source_filepath.suffix.lower() != ".mrc":
+
+            mrc_filepath = (parent_filepath / f"{source_filepath.stem}_stitched_grid01_bin{binning}.mrc")
+            if mrc_filepath.exists():
+                return mrc_filepath
+
+        raise FileNotFoundError(f'Grid map file not found for "{source_filepath}"')
+
+    def resolve_lamella_filepath(self, navigator: "Navigator", source_filepath: Path) -> Path:
+
+        binning = self._map_binnings["lamella"]
+        parent_filepath = self._stitched_dirpath if self._stitched_dirpath is not None else source_filepath.parent
+        filepath = parent_filepath / f"{source_filepath.stem}_stitched_grid01_bin{binning}{source_filepath.suffix}"
+
+        if filepath.exists():
+            return filepath
+
+        if source_filepath.suffix.lower() != ".mrc":
+
+            mrc_filepath = parent_filepath / f"{source_filepath.stem}_stitched_grid01_bin{binning}.mrc"
+            if mrc_filepath.exists():
+                return mrc_filepath
+
+        raise FileNotFoundError(f'Lamella map file not found for "{source_filepath}"')
+
+    def resolve_view_filepath(self, navigator: "Navigator", source_filepath: Path) -> Path:
+
+        # First try next to the Navigator file.
+        filepath = navigator.filepath.parent / source_filepath.name
+        if filepath.exists():
+            return filepath
+
+        # Then try the sibling "pace" directory.
+        filepath = navigator.filepath.parent.parent / "pace" / source_filepath.name
+        if filepath.exists():
+            return filepath
+
+        raise FileNotFoundError(f'View map file not found for "{source_filepath}"')
+
+    def resolve_target_filepath(self, navigator: "Navigator", source_filepath: Path) -> Path:
+
+        # First try next to the Navigator file.
+        filepath = navigator.filepath.parent / source_filepath.name
+        if filepath.exists():
+            return filepath
+
+        # Then try the sibling "pace" directory.
+        filepath = navigator.filepath.parent.parent / "pace" / source_filepath.name
+        if filepath.exists():
+            return filepath
+
+        # Preserve old TomoCLEM behavior:
+        # targets may not exist yet, but this is their expected location.
+        return filepath
+
+    def build_relationships(self, navigator: "Navigator", hierarchy: MapHierarchy) -> None:
+
+        # All lamellae belong to the single grid.
+        if ("grid" in self._map_types and "lamella" in self._map_types):
+            grid_id = navigator.get_grid_id()
+            for lamella_id in navigator.get_map_ids("lamella"):
+                hierarchy.add_relation("grid", grid_id, "lamella", lamella_id)
+
+        # view -> lamella and tgt -> view matching is generic
+        # and defined by match_rules.
+        super().build_relationships(navigator, hierarchy)
 
 
 # ============================================================================
@@ -1363,9 +1485,17 @@ class Navigator:
         pass
 
     # ------------------------------------------------------------------------
-    # Generic map access
+    # Properties
     # ------------------------------------------------------------------------
 
+    @property
+    def map_types(self) -> list[str]:
+        return self.profile.map_types
+
+    # ------------------------------------------------------------------------
+    # Generic map access
+    # ------------------------------------------------------------------------
+        
     def get_map(self, map_type: str, map_id: str) -> NavigatorMap:
         return self.maps.get(map_type, map_id)
 
@@ -1577,42 +1707,75 @@ class Navigator:
         resolution_xyz = np.asarray(map_.load_resolution(), dtype=float)
 
         if not np.isclose(resolution_xyz[0], resolution_xyz[1]):
-            raise ValueError(f"Affine construction requires isotropic XY resolution. Found: {resolution_xyz[:2]}")
+            raise ValueError(f"Affine construction currently requires isotropic XY resolution. Found: {resolution_xyz[:2]}")
 
-        # The MRC resolution belongs to the image actually being visualized.
-        # SerialEM's MapScaleMat, however, maps stage displacement [µm] to pixels of the original map image.
-        # If our visualization image has subsequently been binned, convert its pixel size back to that original-map pixel size.
-        serialem_resolution_xy = resolution_xyz[:2] / map_.binning
+        map_binning = float(map_.get_serialem_value("MapBinning", 1))
+        mont_binning = float(map_.get_serialem_value("MontBinning", map_binning))
+        is_montage = bool(map_.get_serialem_value("MapMontage", 0))
 
-        # Convert SerialEM's stage -> pixel matrix into
-        # stage -> physical-image-coordinate [µm].
+        if map_binning <= 0:
+            raise ValueError(f'Invalid MapBinning for map "{map_.id}": {map_binning}')
+        if mont_binning <= 0:
+            mont_binning = map_binning
+
+        # Convert the resolution of the image that we actually load to
+        # the pixel scale corresponding to SerialEM's MapScaleMat.
         #
-        #     Δp_pixels = MapScaleMat @ Δstage
+        # For montage maps, MapScaleMat relates to the initial montage-map
+        # coordinates, for which MapBinning / MontBinning is the required
+        # correction.
         #
-        # therefore
+        # For non-montage maps, the relationship is reversed: MontBinning
+        # represents the acquisition binning underlying MapScaleMat.
+        if is_montage:
+            serialem_scale_factor = (map_binning / mont_binning / map_.binning)
+        else:
+            serialem_scale_factor = (mont_binning / map_binning / map_.binning)
+
+        serialem_resolution_xy = (resolution_xyz[:2] * serialem_scale_factor)
+
+        # SerialEM:
         #
-        #     Δp_um = diag(pixel_size) @ MapScaleMat @ Δstage
+        #   delta_pixel = MapScaleMat @ delta_stage
         #
+        # Convert pixel displacement to physical image coordinates [µm].
         stage_to_image_linear = (np.diag(serialem_resolution_xy) @ map_scale)
 
-        if rotate_90:
-            rotation = np.array([[0.0, -1.0],[1.0,  0.0]])
-            stage_to_image_linear = stage_to_image_linear @ rotation
-
-        # Physical coordinates of the center of the loaded image.
-        image_center_xy = (shape_xyz[:2] * resolution_xyz[:2] / 2)
-
-        # Construct stage -> image-physical-coordinate transform:
+        # The singular values describe the physical scale represented by
+        # MapScaleMat after accounting for the relevant pixel size.
         #
-        #     q = A @ (stage - StageXYZ) + center
-        #       = A @ stage + (center - A @ StageXYZ)
+        # For a correctly interpreted SerialEM map transform, they should
+        # normally be reasonably close to 1. Large power-of-two deviations
+        # often indicate an incorrect binning interpretation.
+        singular_values = np.linalg.svd(stage_to_image_linear, compute_uv=False)
+
+        if np.any((singular_values < 0.5) | (singular_values > 2.0)):
+            raise ValueError(
+                f'Suspicious SerialEM affine scale for map "{map_.id}". '
+                f'Singular values: {singular_values}. '
+                f'MapBinning={map_binning}, '
+                f'MontBinning={mont_binning}, '
+                f'MapMontage={int(is_montage)}, '
+                f'processing binning={map_.binning}, '
+                f'resolution={resolution_xyz[:2]}.'
+            )
+
+        if rotate_90:
+            rotation = np.array([[0.0, -1.0], [1.0,  0.0]])
+            stage_to_image_linear = (stage_to_image_linear @ rotation)
+
+        image_center_xy = (shape_xyz[:2] * resolution_xyz[:2] / 2.0)
+
+        # stage -> physical image coordinates:
+        #
+        #   q = A @ (stage - StageXYZ) + center
         #
         affine = np.eye(4, dtype=float)
         affine[:2, :2] = stage_to_image_linear
         affine[:2, 3] = (image_center_xy - stage_to_image_linear @ stage_xy)
 
         if is_3d:
-            affine[2, 3] = shape_xyz[2] * resolution_xyz[2] / 2
+            affine[2, 3] = (shape_xyz[2] * resolution_xyz[2] / 2.0)
         if invert:
             affine = np.linalg.inv(affine)
         if not full_square:
@@ -1633,7 +1796,52 @@ class Navigator:
         *,
         parent_map_type: str | None = None,
     ) -> None:
-        pass
+        maps = list(maps)
+
+        if not maps:
+            return
+
+        # Validate map objects.
+        for map_ in maps:
+            if map_.map_type != map_type:
+                raise ValueError(f'Expected map_type="{map_type}", but map "{map_.id}" has map_type="{map_.map_type}".')
+
+        # Add a new map type if necessary.
+        if map_type not in self.profile.map_types:
+
+            if parent_map_type is None:
+                raise ValueError(f'parent_map_type is required when adding new map type "{map_type}".')
+            if parent_map_type not in self.profile.map_types:
+                raise ValueError(f'Unknown parent map type: "{parent_map_type}"')
+            # Dynamic map types are appended to the hierarchy.
+            if self.profile.map_types[-1] != parent_map_type:
+                raise ValueError(
+                    f'New map type "{map_type}" can only be added below the current last map type '
+                    f'"{self.profile.map_types[-1]}". Found parent_map_type="{parent_map_type}".'
+                )
+
+            self.profile.add_map_type(map_type)
+            self.hierarchy.add_map_type(map_type)
+        
+        # Existing map type.
+        elif parent_map_type is not None:
+
+            expected_parent_type = self.hierarchy.parent_type(map_type)
+            if expected_parent_type != parent_map_type:
+                raise ValueError(f'Invalid parent type for "{map_type}": expected "{expected_parent_type}", found "{parent_map_type}".')
+
+        for map_ in maps:
+            if (map_type, map_.id) in self.maps:
+                raise ValueError(f'Map already exists: map_type="{map_type}", id="{map_.id}"')
+            
+        for map_ in maps:
+            self.maps.add(map_)
+            self.hierarchy.add_node(
+                map_type,
+                map_.id,
+            )
+
+        self.hierarchy.validate()
 
     def add_tomograms(
         self,
@@ -1641,14 +1849,145 @@ class Navigator:
         pattern: str = "*.mrc",
         *,
         parent_map_type: str = "tgt",
-        parent_match_rule: MatchRule | None = None,
-        tomo_match_rule: MatchRule | None = None,
+        parent_match_rule: MatchRule | Sequence[str] | None = None,
+        tomo_match_regex: str | None = None,
     ) -> None:
-        pass
 
-    def remove_map_type(self, map_type: str) -> None:
-        pass
+        if parent_map_type not in self.map_types:
+            raise ValueError(f'Unknown parent map type: "{parent_map_type}"')
+        if parent_map_type != self.map_types[-1]:
+            raise ValueError(
+                f'Tomograms can only be added below the current last map type "{self.map_types[-1]}". Found parent_map_type="{parent_map_type}".'
+            )
 
+        if parent_match_rule is None:
+            parent_match_rule = MatchRule(item_key="MapFile", regex=r"L(\d{2})_tgt_(\d{3})")
+        else:
+            parent_match_rule = MatchRule.from_config(parent_match_rule)
+
+        if tomo_match_regex is None:
+            tomo_match_regex = r"L(\d{2})_ts_(\d{3})"
+
+        dirpath = Path(dirpath)
+        tomo_filepaths = sorted(dirpath.glob(pattern))
+
+        if not tomo_filepaths:
+            raise ValueError(f'No tomograms found in "{dirpath}" with pattern "{pattern}".')
+
+        # ------------------------------------------------------------
+        # Match IDs of possible parent maps
+        # ------------------------------------------------------------
+
+        parent_matches = {}
+
+        for parent_map in self.iter_maps(parent_map_type):
+            match_id = self.profile.match_id(self, parent_map, parent_match_rule)
+            if match_id is None:
+                continue
+            parent_matches.setdefault(match_id, []).append(parent_map)
+
+        tomo_maps = []
+        tomo_parent_ids = {}
+
+        # ------------------------------------------------------------
+        # Construct tomo maps
+        # ------------------------------------------------------------
+
+        for idx, tomo_filepath in enumerate(tomo_filepaths):
+
+            tomo_id = str(idx)
+            match_id = match_regex(tomo_filepath.name, tomo_match_regex)
+            if match_id is None:
+                raise ValueError(f'Could not determine match ID for tomogram "{tomo_filepath}".')
+            
+            matching_parents = parent_matches.get(match_id, [],)
+            if len(matching_parents) == 0:
+                raise ValueError(f'No matching {parent_map_type} found for tomogram "{tomo_filepath}". Match ID: "{match_id}"')
+
+            if len(matching_parents) > 1:
+                raise ValueError(
+                    f'Ambiguous {parent_map_type} match for tomogram "{tomo_filepath}". '
+                    f'Match ID: "{match_id}", parents: {[map_.id for map_ in matching_parents]}'
+                )
+
+            parent_map = matching_parents[0]
+            map_scale_matrix = parent_map.get_serialem_value("MapScaleMat")
+            stage_xyz = parent_map.get_serialem_value("StageXYZ")
+
+            if map_scale_matrix is None:
+                raise ValueError(f'Parent map "{parent_map.id}" has no MapScaleMat.')
+            if stage_xyz is None:
+                raise ValueError(f'Parent map "{parent_map.id}" has no StageXYZ.')
+
+            serialem_item = {"MapFile": str(tomo_filepath)}
+
+            for key in (
+                "MapScaleMat",
+                "StageXYZ",
+                "MapBinning",
+                "MontBinning",
+                "MapMontage",
+            ):
+                if parent_map.has_serialem_key(key):
+                    serialem_item[key] = parent_map.get_serialem_value(key)
+
+            # The actual tomo determines its array dimensions.
+            shape = get_mrc_shape(tomo_filepath)
+
+            # IMPORTANT:
+            # Preserve the behavior of the old implementation.
+            #
+            # MapScaleMat belongs to the matched parent acquisition,
+            # therefore use the parent's image resolution together with
+            # the inherited MapScaleMat.
+            resolution = np.asarray(parent_map.load_resolution(), dtype=float).copy()
+
+            tomo_map = NavigatorMap(
+                id=tomo_id,
+                map_type="tomo",
+                serialem_item=serialem_item,
+                source_filepath=tomo_filepath,
+                filepath=tomo_filepath,
+                binning=1,
+                resolution=resolution,
+                shape=shape,
+                metadata={
+                    "parent_map_type": parent_map_type,
+                    "parent_map_id": parent_map.id,
+                    # Keep the true tomo voxel spacing available separately.
+                    "tomo_resolution": get_resolution_from_mrc_header(tomo_filepath, unit="micrometer")
+                },
+            )
+
+            tomo_maps.append(tomo_map)
+            tomo_parent_ids[tomo_id] = parent_map.id
+
+        # ------------------------------------------------------------
+        # Add hierarchy level
+        # ------------------------------------------------------------
+
+        self.add_maps("tomo", tomo_maps, parent_map_type=parent_map_type)
+        for tomo_map in tomo_maps:
+            self.hierarchy.add_relation(parent_map_type, tomo_parent_ids[tomo_map.id], "tomo", tomo_map.id)
+        self.hierarchy.validate()
+
+    def remove_map_type(
+        self,
+        map_type: str,
+    ) -> None:
+
+        if map_type not in self.profile.map_types:
+            raise ValueError(f'Unknown map type: "{map_type}"')
+        if map_type != self.profile.map_types[-1]:
+            raise ValueError(f'Only the last map type can be removed. Current hierarchy: {self.profile.map_types}')
+
+        for map_id in list(self.get_map_ids(map_type)):
+            self.maps.remove(map_type, map_id)
+
+        self.hierarchy.remove_map_type(map_type)
+        self.profile.remove_map_type(map_type)
+        self.hierarchy.validate()
+        
     # ------------------------------------------------------------------------
     # Iteration
     # ------------------------------------------------------------------------

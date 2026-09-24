@@ -108,10 +108,16 @@ class BlenderRenderer(Renderer):
     ):
 
         from matplotlib.colors import to_rgb
+        from PIL import Image
 
         objects = []
+        slices = []
         mins = []
         maxs = []
+
+        # -------------------------------------------------
+        # Objects
+        # -------------------------------------------------
 
         for i, obj in enumerate(scene.objects):
 
@@ -123,7 +129,6 @@ class BlenderRenderer(Renderer):
             mins.append(mesh.points.min(axis=0))
             maxs.append(mesh.points.max(axis=0))
 
-            mesh_file = export_dir / f"object_{i}.ply"
             mesh.save(mesh_file)
 
             objects.append(
@@ -137,8 +142,131 @@ class BlenderRenderer(Renderer):
                 }
             )
 
-        mins = np.vstack(mins).min(axis=0)
-        maxs = np.vstack(maxs).max(axis=0)
+        # -------------------------------------------------
+        # EM slices
+        # -------------------------------------------------
+
+        for i, em_slice in enumerate(scene.slices):
+
+            volume = em_slice.volume
+            data = volume.data
+
+            spacing = (
+                np.asarray(volume.voxel_size, dtype=float)
+                * self.world_scale
+            )
+
+            nz, ny, nx = data.shape
+
+            axis = em_slice.axis
+            index = em_slice.index
+
+            if axis == "z":
+
+                image = data[index, :, :]
+
+                origin = [
+                    index * spacing[0],
+                    0.0,
+                    0.0,
+                ]
+
+                size = [
+                    (ny - 1) * spacing[1],
+                    (nx - 1) * spacing[2],
+                ]
+
+            elif axis == "y":
+
+                image = data[:, index, :]
+
+                origin = [
+                    0.0,
+                    index * spacing[1],
+                    0.0,
+                ]
+
+                size = [
+                    (nz - 1) * spacing[0],
+                    (nx - 1) * spacing[2],
+                ]
+
+            elif axis == "x":
+
+                image = data[:, :, index]
+
+                origin = [
+                    0.0,
+                    0.0,
+                    index * spacing[2],
+                ]
+
+                size = [
+                    (nz - 1) * spacing[0],
+                    (ny - 1) * spacing[1],
+                ]
+
+            else:
+                raise ValueError(
+                    f"Invalid slice axis: {axis}"
+                )
+
+            # ---------------------------------------------
+            # Convert EM data to uint8
+            # ---------------------------------------------
+
+            if em_slice.clim is None:
+                vmin = float(np.min(image))
+                vmax = float(np.max(image))
+            else:
+                vmin, vmax = em_slice.clim
+
+            denom = vmax - vmin
+
+            if denom == 0:
+                image_normalized = np.zeros_like(
+                    image,
+                    dtype=np.float32,
+                )
+            else:
+                image_normalized = np.clip(
+                    (image.astype(np.float32) - vmin) / denom,
+                    0,
+                    1,
+                )
+
+            image_uint8 = (
+                image_normalized * 255
+            ).astype(np.uint8)
+
+            image_file = (
+                export_dir / f"slice_{i}.png"
+            )
+
+            Image.fromarray(image_uint8).save(
+                image_file
+            )
+
+            slices.append(
+                {
+                    "image": str(image_file),
+                    "axis": axis,
+                    "index": int(index),
+                    "origin": origin,
+                    "size": size,
+                    "opacity": em_slice.opacity,
+                }
+            )
+
+        # -------------------------------------------------
+        # Bounds
+        # -------------------------------------------------
+
+        # Use the underlying data bounds so empty segmentations and EM-only
+        # scenes still have deterministic framing.
+        bounds_min, bounds_max = scene.get_bounds()
+        mins = np.asarray(bounds_min, dtype=float) * self.world_scale
+        maxs = np.asarray(bounds_max, dtype=float) * self.world_scale
 
         center = (mins + maxs) / 2
         extent = maxs - mins
@@ -150,21 +278,104 @@ class BlenderRenderer(Renderer):
 
         camera = scene.camera_position
 
+        camera_projection = scene.camera_projection
+        ortho_scale = None
+        camera_position = np.asarray(camera[0], dtype=float) * self.world_scale
+        camera_focal = np.asarray(camera[1], dtype=float) * self.world_scale
+        camera_up = np.asarray(camera[2], dtype=float)
+        view_angle = 30.0
+
+        if (
+            scene.camera_preset is not None
+            and camera_projection == "orthographic"
+        ):
+            axis = scene.camera_preset[0]
+
+            if axis == "z":
+                width = extent[2]   # numpy x
+                height = extent[1]  # numpy y
+            elif axis == "y":
+                width = extent[2]   # numpy x
+                height = extent[0]  # numpy z
+            elif axis == "x":
+                width = extent[1]   # numpy y
+                height = extent[0]  # numpy z
+            else:
+                raise ValueError(
+                    f"Invalid camera preset: {scene.camera_preset}"
+                )
+
+            aspect = self.output_size[0] / self.output_size[1]
+
+            # Blender's ortho_scale is the horizontal camera-frame width.
+            # Ensure both projected width and height fit the output aspect.
+            ortho_scale = max(
+                width,
+                height * aspect,
+            ) * (1.0 + scene.camera_fit_padding)
+
+        elif (
+            scene.camera_preset is not None
+            and camera_projection == "perspective"
+        ):
+            camera_side = camera_position - camera_focal
+            camera_side /= np.linalg.norm(camera_side)
+
+            forward = -camera_side
+            camera_up /= np.linalg.norm(camera_up)
+            right = np.cross(forward, camera_up)
+            right /= np.linalg.norm(right)
+            camera_up = np.cross(right, forward)
+            camera_up /= np.linalg.norm(camera_up)
+
+            corners = np.array([
+                [z, y, x]
+                for z in (mins[0], maxs[0])
+                for y in (mins[1], maxs[1])
+                for x in (mins[2], maxs[2])
+            ])
+            offsets = corners - camera_focal
+
+            aspect = self.output_size[0] / self.output_size[1]
+            tan_v = np.tan(np.deg2rad(view_angle) * 0.5)
+            tan_h = tan_v * aspect
+            padding = 1.0 + scene.camera_fit_padding
+
+            along = offsets @ camera_side
+            horizontal = np.abs(offsets @ right)
+            vertical = np.abs(offsets @ camera_up)
+
+            required_distance = np.max(
+                along
+                + np.maximum(
+                    padding * horizontal / tan_h,
+                    padding * vertical / tan_v,
+                )
+            )
+
+            camera_position = (
+                camera_focal
+                + camera_side * required_distance
+            )
+
+        elif camera_projection not in {"perspective", "orthographic"}:
+            raise ValueError(
+                f"Invalid camera projection: {camera_projection}"
+            )
+
         return {
             "objects": objects,
+            "slices": slices,
 
             "camera": {
-                "position": (
-                    np.array(camera[0]) * self.world_scale
-                ).tolist(),
+                "position": camera_position.tolist(),
+                "focal_point": camera_focal.tolist(),
+                "up": camera_up.tolist(),
 
-                "focal_point": (
-                    np.array(camera[1]) * self.world_scale
-                ).tolist(),
-
-                "up": list(camera[2]),
-
-                "view_angle": 30.0,
+                "view_angle": view_angle,
+                "projection": camera_projection,
+                "ortho_scale": ortho_scale,
+                "flip_horizontal": scene.camera_flip_horizontal,
             },
 
             "background": scene.background,
@@ -272,13 +483,200 @@ for obj in data["objects"]:
     mesh_obj.data.materials.append(mat)
 
 # -------------------------------------------------
+# EM slice materials
+# -------------------------------------------------
+
+def make_slice_material(name, image_file, opacity=1.0):
+
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    nodes.clear()
+
+    output = nodes.new(
+        "ShaderNodeOutputMaterial"
+    )
+
+    emission = nodes.new(
+        "ShaderNodeEmission"
+    )
+
+    tex = nodes.new(
+        "ShaderNodeTexImage"
+    )
+
+    image = bpy.data.images.load(image_file)
+    image.pack()
+
+    tex.image = image
+    tex.interpolation = "Linear"
+
+    links.new(
+        tex.outputs["Color"],
+        emission.inputs["Color"],
+    )
+
+    emission.inputs["Strength"].default_value = 1.0
+
+    links.new(
+        emission.outputs["Emission"],
+        output.inputs["Surface"],
+    )
+
+    return mat
+
+# -------------------------------------------------
+# EM slices
+# -------------------------------------------------
+
+for i, s in enumerate(data.get("slices", [])):
+
+    axis = s["axis"]
+    origin = s["origin"]
+    size = s["size"]
+
+    # -------------------------------------------------
+    # Explicit geometry
+    #
+    # Library world coordinates:
+    #   world 0 = numpy z
+    #   world 1 = numpy y
+    #   world 2 = numpy x
+    #
+    # UV convention:
+    #   U -> second image dimension (columns)
+    #   V -> first image dimension (rows)
+    # -------------------------------------------------
+
+    if axis == "z":
+
+        z = origin[0]
+        sy, sx = size
+
+        vertices = [
+            (z, 0,  0),
+            (z, 0,  sx),
+            (z, sy, sx),
+            (z, sy, 0),
+        ]
+
+    elif axis == "y":
+
+        y = origin[1]
+        sz, sx = size
+
+        vertices = [
+            (0,  y, 0),
+            (0,  y, sx),
+            (sz, y, sx),
+            (sz, y, 0),
+        ]
+
+    elif axis == "x":
+
+        x = origin[2]
+        sz, sy = size
+
+        vertices = [
+            (0,  0,  x),
+            (0,  sy, x),
+            (sz, sy, x),
+            (sz, 0,  x),
+        ]
+
+    else:
+        raise ValueError(
+            f"Invalid slice axis: {axis}"
+        )
+
+    faces = [
+        (0, 1, 2, 3),
+    ]
+
+    mesh = bpy.data.meshes.new(
+        f"EM_slice_mesh_{i}"
+    )
+
+    mesh.from_pydata(
+        vertices,
+        [],
+        faces,
+    )
+
+    mesh.update()
+
+    plane = bpy.data.objects.new(
+        f"EM_slice_{axis}_{s['index']}",
+        mesh,
+    )
+
+    bpy.context.collection.objects.link(
+        plane
+    )
+
+    # -------------------------------------------------
+    # UV coordinates
+    # -------------------------------------------------
+
+    uv_layer = mesh.uv_layers.new(
+        name="UVMap"
+    )
+
+    # PIL/NumPy row 0 is at the top of the image,
+    # while Blender V=0 is the bottom. Therefore
+    # V is deliberately flipped here.
+    uv_coords = [
+        (0, 1),
+        (1, 1),
+        (1, 0),
+        (0, 0),
+    ]
+
+    for loop, uv in zip(
+        mesh.loops,
+        uv_coords,
+    ):
+        uv_layer.data[loop.index].uv = uv
+
+    # -------------------------------------------------
+    # Material
+    # -------------------------------------------------
+
+    mat = make_slice_material(
+        f"EM_slice_material_{i}",
+        s["image"],
+        s["opacity"],
+    )
+
+    plane.data.materials.append(mat)
+
+# -------------------------------------------------
 # camera
 # -------------------------------------------------
 
 c = data["camera"]
 
 cam_data = bpy.data.cameras.new("Camera")
-cam_data.angle = math.radians(c["view_angle"])
+
+# Projection is exported explicitly by Scene. Perspective is the default.
+projection = c.get("projection", "perspective").lower()
+
+if projection == "perspective":
+    cam_data.type = "PERSP"
+    cam_data.sensor_fit = "VERTICAL"
+    cam_data.sensor_height = 32.0
+    cam_data.lens = (
+        0.5 * cam_data.sensor_height
+        / math.tan(0.5 * math.radians(c["view_angle"]))
+    )
+elif projection == "orthographic":
+    cam_data.type = "ORTHO"
+    cam_data.ortho_scale = c["ortho_scale"]
+else:
+    raise ValueError(f"Invalid camera projection: {projection}")
 
 cam = bpy.data.objects.new(
     "Camera",
@@ -292,11 +690,21 @@ cam.location = c["position"]
 
 target = mathutils.Vector(c["focal_point"])
 
-direction = target - cam.location
+forward = (target - cam.location).normalized()
+up = mathutils.Vector(c["up"]).normalized()
 
-cam.rotation_euler = (
-    direction.to_track_quat("-Z", "Y").to_euler()
-)
+# Blender cameras look along local -Z with local +Y as camera-up.
+# Build the camera basis explicitly so Scene.view_up is preserved.
+right = forward.cross(up).normalized()
+up = right.cross(forward).normalized()
+
+rotation = mathutils.Matrix((
+    right,
+    up,
+    -forward,
+)).transposed()
+
+cam.rotation_euler = rotation.to_euler()
 
 cam_data.clip_start = 0.1
 cam_data.clip_end = 100000
@@ -392,7 +800,55 @@ samples = int(argv[3])
 
 scene = bpy.context.scene
 
+# -------------------------------------------------
+# Cycles GPU configuration
+# -------------------------------------------------
+
 scene.render.engine = "CYCLES"
+
+prefs = bpy.context.preferences
+
+cycles_prefs = prefs.addons["cycles"].preferences
+
+# Try CUDA first, then OPTIX, then HIP
+available_devices = []
+
+for backend in ["OPTIX", "CUDA", "HIP", "METAL"]:
+    try:
+        cycles_prefs.compute_device_type = backend
+        cycles_prefs.get_devices()
+
+        devices = cycles_prefs.devices
+
+        if any(d.type != "CPU" for d in devices):
+            print(f"Using Cycles backend: {backend}")
+
+            for device in devices:
+                device.use = device.type != "CPU"
+                print(
+                    f"Device: {device.name} "
+                    f"type={device.type} "
+                    f"enabled={device.use}"
+                )
+
+            scene.cycles.device = "GPU"
+            available_devices = devices
+            break
+
+    except Exception as e:
+        print(
+            f"Backend {backend} unavailable: {e}"
+        )
+
+
+if not available_devices:
+    print("WARNING: No GPU found, falling back to CPU")
+    scene.cycles.device = "CPU"
+
+
+# -------------------------------------------------
+# Render settings
+# -------------------------------------------------
 
 scene.cycles.samples = samples
 scene.cycles.use_denoising = True
@@ -408,6 +864,11 @@ scene.view_settings.gamma = 0.9
 scene.render.film_transparent = True
 
 scene.render.filepath = output
+
+print(
+    "Final Cycles device:",
+    scene.cycles.device
+)
 
 bpy.ops.render.render(
     write_still=True

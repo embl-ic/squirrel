@@ -1,4 +1,3 @@
-
 import numpy as np
 import os
 import hashlib
@@ -453,10 +452,25 @@ class SegmentObject:
 class Segmentation:
     """Container for a labeled segmentation."""
 
-    def __init__(self, data=None, voxel_size=(1, 1, 1)):
+    def __init__(self, data=None, voxel_size=(1, 1, 1), origin=(0, 0, 0)):
         self.data = data
         self.voxel_size = voxel_size
+        self.origin = origin
         self.objects = []
+
+    @property
+    def bounds(self):
+        if self.data is None:
+            raise RuntimeError("Cannot determine segmentation bounds without data.")
+
+        shape = np.asarray(self.data.shape, dtype=float)
+        voxel_size = np.asarray(self.voxel_size, dtype=float)
+        origin = np.asarray(self.origin, dtype=float)
+
+        return (
+            origin,
+            origin + (shape - 1) * voxel_size,
+        )
 
     def load(self):
         pass
@@ -639,28 +653,80 @@ class Segmentation:
             f"{self.cache_key()}_objects.npz",
         )
 
+
+class EMSlice:
+    """Represents one axis-aligned slice through an EM volume."""
+
+    def __init__(
+        self,
+        volume,
+        axis,
+        index,
+        cmap="gray",
+        clim=None,
+        opacity=1.0,
+    ):
+        self.volume = volume
+        self.axis = axis
+        self.index = index
+
+        self.cmap = cmap
+        self.clim = clim
+        self.opacity = opacity
+
     
 class EMVolume:
-    """Container for EM data."""
+    """Represents a 3D microscopy volume."""
 
-    def __init__(self):
-        self.data = None
-        self.voxel_size = None
+    def __init__(
+        self,
+        data,
+        voxel_size=(1, 1, 1),
+        origin=(0, 0, 0),
+    ):
+        self.data = data
+        self.voxel_size = voxel_size
+        self.origin = origin
 
-    def load(self):
-        pass
+    @property
+    def bounds(self):
+        shape = np.asarray(self.data.shape, dtype=float)
+        voxel_size = np.asarray(self.voxel_size, dtype=float)
+        origin = np.asarray(self.origin, dtype=float)
 
-    def get_slice(self):
-        pass
+        return (
+            origin,
+            origin + (shape - 1) * voxel_size,
+        )
+
+    def get_slice(
+        self,
+        axis,
+        index,
+        **kwargs,
+    ):
+        return EMSlice(
+            volume=self,
+            axis=axis,
+            index=index,
+            **kwargs,
+        )
 
 
 class Scene:
 
     def __init__(self):
+
         self.objects = []
+        self.segmentations = []
+        self.slices = []
 
         self.background = "black"
         self.camera_position = None
+        self.camera_flip_horizontal = False
+        self.camera_preset = None
+        self.camera_projection = "perspective"
+        self.camera_fit_padding = 0.05
         self.anti_aliasing = True
 
     # Add data
@@ -671,12 +737,14 @@ class Scene:
         return self
 
     def add_segmentation(self, segmentation):
+        self.segmentations.append(segmentation)
         for obj in segmentation:
             self.add_object(obj)
         return self
 
-    def add_slice(self):
-        pass
+    def add_slice(self, em_slice):
+        self.slices.append(em_slice)
+        return self
 
     # Appearance
     def update_colors(self):
@@ -691,6 +759,102 @@ class Scene:
     def set_camera(self, camera_position):
 
         self.camera_position = camera_position
+        self.camera_flip_horizontal = False
+        self.camera_preset = None
+        self.camera_projection = "perspective"
+
+        return self
+
+    def set_camera_preset(
+        self,
+        preset,
+        distance_factor=2.0,
+        projection="perspective",
+    ):
+
+        bounds_min, bounds_max = self.get_bounds()
+
+        center = (
+            bounds_min + bounds_max
+        ) / 2
+
+        extent = bounds_max - bounds_min
+
+        distance = (
+            np.max(extent)
+            * distance_factor
+        )
+
+        # Data/world convention:
+        #   world 0 = numpy z
+        #   world 1 = numpy y
+        #   world 2 = numpy x
+        #
+        # "front" means looking from the low-index side of the axis, so
+        # z_front places z=0 nearest the camera. For the canonical front
+        # views we additionally mirror the rendered image horizontally.
+        # This is necessary to show numpy/Fiji image coordinates with
+        # x increasing to the right while y increases downward when viewed
+        # from the low-index side of a right-handed 3-D camera.
+        presets = {
+            "z_front": {
+                "direction": (-1, 0, 0),
+                "view_up": (0, -1, 0),
+                "flip_horizontal": True,
+            },
+            "z_back": {
+                "direction": (1, 0, 0),
+                "view_up": (0, -1, 0),
+                "flip_horizontal": True,
+            },
+            "y_front": {
+                "direction": (0, -1, 0),
+                "view_up": (-1, 0, 0),
+                "flip_horizontal": False,
+            },
+            "y_back": {
+                "direction": (0, 1, 0),
+                "view_up": (-1, 0, 0),
+                "flip_horizontal": False,
+            },
+            "x_front": {
+                "direction": (0, 0, -1),
+                "view_up": (0, -1, 0),
+                "flip_horizontal": False,
+            },
+            "x_back": {
+                "direction": (0, 0, 1),
+                "view_up": (0, -1, 0),
+                "flip_horizontal": False,
+            },
+        }
+
+        if preset not in presets:
+            raise ValueError(
+                f"Unknown camera preset: {preset}"
+            )
+
+        settings = presets[preset]
+        direction = np.asarray(
+            settings["direction"],
+            dtype=float,
+        )
+
+        position = center + direction * distance
+
+        self.camera_position = [
+            tuple(position),
+            tuple(center),
+            tuple(settings["view_up"]),
+        ]
+        if projection not in {"perspective", "orthographic"}:
+            raise ValueError(
+                f"Invalid camera projection: {projection}"
+            )
+
+        self.camera_flip_horizontal = settings["flip_horizontal"]
+        self.camera_preset = preset
+        self.camera_projection = projection
 
         return self
 
@@ -700,6 +864,52 @@ class Scene:
 
         return self
 
+    def get_bounds(self):
+
+        mins = []
+        maxs = []
+
+        # Prefer the full source-data extents. This keeps camera presets
+        # stable even when a segmentation contains no extracted objects.
+        for segmentation in self.segmentations:
+            bounds_min, bounds_max = segmentation.bounds
+            mins.append(bounds_min)
+            maxs.append(bounds_max)
+
+        # An EM slice represents a view into its complete source volume, so
+        # use the volume bounds rather than only the currently shown plane.
+        seen_volumes = set()
+        for em_slice in self.slices:
+            volume = em_slice.volume
+            volume_id = id(volume)
+            if volume_id in seen_volumes:
+                continue
+            seen_volumes.add(volume_id)
+
+            bounds_min, bounds_max = volume.bounds
+            mins.append(bounds_min)
+            maxs.append(bounds_max)
+
+        # Keep add_object() useful for scenes that do not have a source
+        # segmentation/volume attached. Mesh bounds are only a fallback.
+        if not mins:
+            for obj in self.objects:
+                if obj.mesh is None:
+                    continue
+                mins.append(obj.mesh.points.min(axis=0))
+                maxs.append(obj.mesh.points.max(axis=0))
+
+        if not mins:
+            raise RuntimeError(
+                "Cannot determine scene bounds: the scene contains no "
+                "source volume or processed mesh."
+            )
+
+        return (
+            np.vstack(mins).min(axis=0),
+            np.vstack(maxs).max(axis=0),
+        )
+
 
 if __name__ == '__main__':
 
@@ -707,9 +917,9 @@ if __name__ == '__main__':
     from h5py import File
 
     # ------------------------------------------------------------------
-    # Load segmentation
+    # Load segmentation and EM data
 
-    out_dir = "/media/julian/Data/tmp/pyvista_new"
+    out_dir = "/media/julian/Data/tmp/pyvista_new2"
     os.makedirs(out_dir, exist_ok=True)
 
     with File(
@@ -718,44 +928,20 @@ if __name__ == '__main__':
     ) as f:
         seg = f["data"][:]
 
-    segmentation = (
-        Segmentation(
-            data=seg,
-            voxel_size=(50, 5, 5),
-        )
-        .extract_objects()
-    )
+    print(seg.shape)
+
+    with File(
+        "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8.h5",
+        "r",
+    ) as f:
+        em_data = f["data"][:]
 
     # ------------------------------------------------------------------
     # Create objects and scene
 
     scene = Scene()
 
-    # # Manual version
-    # for idx, obj in enumerate(segmentation):
-    #     (
-    #         obj
-    #         .to_mesh(cache_file=os.path.join(out_dir, 'cache', 'obj_{:02d}.vtp'.format(idx)))
-    #         .smooth(
-    #             smooth_iterations=1000,
-    #             smooth_xy_only=True, 
-    #             cache_file=os.path.join(out_dir, 'cache', 'obj_{:02d}_smooth_xy.vtp'.format(idx))
-    #         )
-    #         .smooth(
-    #             smooth_iterations=100,
-    #             smooth_xy_only=False,
-    #             cache_file=os.path.join(out_dir, 'cache', 'obj_{:02d}_smooth_xyz.vtp'.format(idx))
-    #         )
-    #         .set_color(
-    #             color='#882255',
-    #             hue_shift=0.05,
-    #             lightness_shift=0.0,
-    #             normal_mode='left_right'
-    #         )
-    #     )
-    #     scene.add_object(obj)
-    #     if idx == 5:
-    #         break
+    # seg[-53:] = 0
 
     # # Internal version
     segmentation = (
@@ -765,25 +951,7 @@ if __name__ == '__main__':
             cache_dir=os.path.join(out_dir, "cache"),
             to_mesh_kwargs={
                 "gaussian_sigma": (0, 1.3, 1.3)
-            },
-            # smooth_xy_kwargs={
-            #     "smooth_iterations": 1000,
-            #     "smooth_relaxation": 0.01,
-            #     "smooth_xy_only": True,
-            # },
-            # smooth_xyz_kwargs={
-            #     "smooth_iterations": 500,
-            #     "smooth_relaxation": 0.01,
-            #     "smooth_xy_only": False,
-            # },
-            # decimate_kwargs={
-            #     "target_reduction": 0.9
-            # },
-            # color_kwargs={
-            #     "color": "#882255",
-            #     "hue_shift": 0.05,
-            #     "normal_mode": "left_right",
-            # },
+            }
         )
         .assign_colors(
             palette='rainbow_discrete',
@@ -797,27 +965,58 @@ if __name__ == '__main__':
     )
     scene.add_segmentation(segmentation)
 
+    em = EMVolume(
+        em_data,
+        voxel_size=(50, 5, 5),
+    )
+
+    # scene.add_slice(
+    #     em.get_slice(
+    #         axis="z",
+    #         index=0,
+    #         cmap="gray",
+    #     )
+    # )
+    scene.add_slice(
+        em.get_slice(
+            axis="x",
+            index=0,
+            cmap="gray",
+        )
+    )
+
     scene.set_background("white")
     scene.set_anti_aliasing()
 
-    scene.set_camera([
-        (2900, 12800, 1300),
-        (2000, 2600, 2600),
-        (0, 0, 1),
-    ])
+    scene.set_camera_preset('x_back')
+    # scene.set_camera([
+    #     (2900, 12800, 1300),
+    #     (2000, 2600, 2600),
+    #     (0, 0, 1),
+    # ])
+    # scene.set_camera([
+    #     (10000, 12800, 3200), 
+    #     (2500, 2600.0, 3200), 
+    #     (0, 0, 1)
+    # ])
+    # scene.set_camera([
+    #     (15000, 2600, 3200), 
+    #     (2500.0, 2600.0, 3200.0), 
+    #     (0, 0, 1)
+    # ])
 
-    # # Pyvista rendering
-    # from squirrel.library.render.pyvista_renderer import PyVistaRenderer
-    # renderer = PyVistaRenderer(off_screen=True, image_size=(3000, 3000), world_scale=0.001)
-    # renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
-    # # renderer.show(scene)
+    # Pyvista rendering
+    from squirrel.library.render.pyvista_renderer import PyVistaRenderer
+    renderer = PyVistaRenderer(off_screen=True, image_size=(1000, 1000), world_scale=0.001)
+    renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
+    # renderer.show(scene)
 
-    # Blender rendering
-    from squirrel.library.render.blender_renderer import BlenderRenderer
-    renderer = BlenderRenderer(
-        samples=128,
-        output_size=(1000, 1000),
-        world_scale=0.001
-    )
-    renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
-    # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))
+    # # Blender rendering
+    # from squirrel.library.render.blender_renderer import BlenderRenderer
+    # renderer = BlenderRenderer(
+    #     samples=128,
+    #     output_size=(1000, 1000),
+    #     world_scale=0.001
+    # )
+    # renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
+    # # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

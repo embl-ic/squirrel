@@ -201,7 +201,7 @@ def make_colormap(
 class SegmentObject:
     """Represents a single labeled object in a segmentation."""
 
-    def __init__(self, label, mask=None, voxel_size=(1, 1, 1), offset=(0, 0, 0)):
+    def __init__(self, label, mask=None, voxel_size=(1, 1, 1), offset=(0, 0, 0), origin=(0, 0, 0)):
         self.label = label
         self.mask = mask
         self.voxel_size = voxel_size
@@ -209,6 +209,7 @@ class SegmentObject:
         self.raw_mesh = None
         self.mesh = None
         self.offset = offset
+        self.origin = origin
 
         # Appearance
         self.name = None
@@ -267,11 +268,16 @@ class SegmentObject:
                 segmentation, sigma=gaussian_sigma
             )
 
-        grid = pv.ImageData()
-        grid.dimensions = segmentation.shape
-        grid.spacing = self.voxel_size
+        # NumPy data is stored as (z, y, x), while rendering/world space is
+        # conventional (x, y, z). Convert only at the geometry boundary.
+        segmentation_xyz = np.transpose(segmentation, (2, 1, 0))
+        sz, sy, sx = self.voxel_size
 
-        grid.point_data["labels"] = segmentation.astype(np.float32).ravel(order="F")
+        grid = pv.ImageData()
+        grid.dimensions = segmentation_xyz.shape
+        grid.spacing = (sx, sy, sz)
+
+        grid.point_data["labels"] = segmentation_xyz.astype(np.float32).ravel(order="F")
 
         self.raw_mesh = grid.contour(
             isosurfaces=[level],
@@ -279,10 +285,12 @@ class SegmentObject:
         )
 
         oz, oy, ox = self.offset
+        origin_z, origin_y, origin_x = self.origin
+        sz, sy, sx = self.voxel_size
         self.raw_mesh.points += np.array([
-            (oz - pad[0]) * self.voxel_size[0],
-            (oy - pad[1]) * self.voxel_size[1],
-            (ox - pad[2]) * self.voxel_size[2],
+            origin_x + (ox - pad[2]) * sx,
+            origin_y + (oy - pad[1]) * sy,
+            origin_z + (oz - pad[0]) * sz,
         ])
 
         self.mesh = self.raw_mesh.copy()
@@ -348,7 +356,7 @@ class SegmentObject:
         )
 
         displacement = smoothed.points - original
-        displacement[:, 0] = 0  # Preserve x coordinate
+        displacement[:, 2] = 0  # Preserve z coordinate; smooth only in world x/y
 
         self.mesh = self.mesh.copy()
         self.mesh.points = original + displacement
@@ -426,6 +434,8 @@ class SegmentObject:
         payload = {
             "label": int(self.label),
             "offset": tuple(int(v) for v in self.offset),
+            "origin": tuple(float(v) for v in self.origin),
+            "voxel_size": tuple(float(v) for v in self.voxel_size),
             "shape": tuple(int(v) for v in self.mask.shape),
             "stage": stage,
             **kwargs,
@@ -463,14 +473,14 @@ class Segmentation:
         if self.data is None:
             raise RuntimeError("Cannot determine segmentation bounds without data.")
 
-        shape = np.asarray(self.data.shape, dtype=float)
-        voxel_size = np.asarray(self.voxel_size, dtype=float)
-        origin = np.asarray(self.origin, dtype=float)
+        # Data metadata is (z, y, x); public/world bounds are (x, y, z).
+        shape_zyx = np.asarray(self.data.shape, dtype=float)
+        voxel_zyx = np.asarray(self.voxel_size, dtype=float)
+        origin_zyx = np.asarray(self.origin, dtype=float)
 
-        return (
-            origin,
-            origin + (shape - 1) * voxel_size,
-        )
+        bounds_min = origin_zyx[::-1]
+        bounds_max = (origin_zyx + (shape_zyx - 1) * voxel_zyx)[::-1]
+        return bounds_min, bounds_max
 
     def load(self):
         pass
@@ -498,6 +508,7 @@ class Segmentation:
                     mask=mask,
                     voxel_size=self.voxel_size,
                     offset=tuple(offset),
+                    origin=self.origin,
                 )
                 for label, mask, offset in zip(
                     data["labels"],
@@ -532,6 +543,7 @@ class Segmentation:
                     mask=mask[z0:z1, y0:y1, x0:x1],
                     voxel_size=self.voxel_size,
                     offset=(z0, y0, x0),
+                    origin=self.origin,
                 )
             )
 
@@ -690,14 +702,14 @@ class EMVolume:
 
     @property
     def bounds(self):
-        shape = np.asarray(self.data.shape, dtype=float)
-        voxel_size = np.asarray(self.voxel_size, dtype=float)
-        origin = np.asarray(self.origin, dtype=float)
+        # Data metadata is (z, y, x); public/world bounds are (x, y, z).
+        shape_zyx = np.asarray(self.data.shape, dtype=float)
+        voxel_zyx = np.asarray(self.voxel_size, dtype=float)
+        origin_zyx = np.asarray(self.origin, dtype=float)
 
-        return (
-            origin,
-            origin + (shape - 1) * voxel_size,
-        )
+        bounds_min = origin_zyx[::-1]
+        bounds_max = (origin_zyx + (shape_zyx - 1) * voxel_zyx)[::-1]
+        return bounds_min, bounds_max
 
     def get_slice(
         self,
@@ -705,6 +717,29 @@ class EMVolume:
         index,
         **kwargs,
     ):
+        axis_to_dim = {
+            "z": 0,
+            "y": 1,
+            "x": 2,
+        }
+
+        if axis not in axis_to_dim:
+            raise ValueError(f"Invalid slice axis: {axis}")
+
+        dim = axis_to_dim[axis]
+        size = self.data.shape[dim]
+
+        # Match NumPy indexing semantics for negative indices while storing
+        # the resolved non-negative index for renderer/world coordinates.
+        if index < 0:
+            index += size
+
+        if index < 0 or index >= size:
+            raise IndexError(
+                f"Slice index {index} is out of bounds for axis '{axis}' "
+                f"with size {size}."
+            )
+
         return EMSlice(
             volume=self,
             axis=axis,
@@ -785,45 +820,37 @@ class Scene:
             * distance_factor
         )
 
-        # Data/world convention:
-        #   world 0 = numpy z
-        #   world 1 = numpy y
-        #   world 2 = numpy x
-        #
-        # "front" means looking from the low-index side of the axis, so
-        # z_front places z=0 nearest the camera. For the canonical front
-        # views we additionally mirror the rendered image horizontally.
-        # This is necessary to show numpy/Fiji image coordinates with
-        # x increasing to the right while y increases downward when viewed
-        # from the low-index side of a right-handed 3-D camera.
+        # Data arrays and metadata remain in NumPy order (z, y, x).
+        # Camera positions and all rendered geometry use world order (x, y, z).
+        # These orientations reproduce Fiji's orthogonal-view conventions.
         presets = {
             "z_front": {
-                "direction": (-1, 0, 0),
+                "direction": (0, 0, -1),
                 "view_up": (0, -1, 0),
                 "flip_horizontal": True,
             },
             "z_back": {
-                "direction": (1, 0, 0),
+                "direction": (0, 0, 1),
                 "view_up": (0, -1, 0),
                 "flip_horizontal": True,
             },
             "y_front": {
                 "direction": (0, -1, 0),
-                "view_up": (-1, 0, 0),
+                "view_up": (0, 0, -1),
                 "flip_horizontal": False,
             },
             "y_back": {
                 "direction": (0, 1, 0),
-                "view_up": (-1, 0, 0),
+                "view_up": (0, 0, -1),
                 "flip_horizontal": False,
             },
             "x_front": {
-                "direction": (0, 0, -1),
+                "direction": (-1, 0, 0),
                 "view_up": (0, -1, 0),
                 "flip_horizontal": False,
             },
             "x_back": {
-                "direction": (0, 0, 1),
+                "direction": (1, 0, 0),
                 "view_up": (0, -1, 0),
                 "flip_horizontal": False,
             },
@@ -909,7 +936,7 @@ class Scene:
             np.vstack(mins).min(axis=0),
             np.vstack(maxs).max(axis=0),
         )
-
+    
 
 if __name__ == '__main__':
 
@@ -970,25 +997,46 @@ if __name__ == '__main__':
         voxel_size=(50, 5, 5),
     )
 
-    # scene.add_slice(
-    #     em.get_slice(
-    #         axis="z",
-    #         index=0,
-    #         cmap="gray",
-    #     )
-    # )
     scene.add_slice(
         em.get_slice(
             axis="x",
-            index=0,
+            index=700,
             cmap="gray",
+        )
+    )
+    scene.add_slice(
+        em.get_slice(
+            axis="y", 
+            index=0,
+            cmap="gray"
+        )
+    )
+    scene.add_slice(
+        em.get_slice(
+            axis="y", 
+            index=-1,
+            cmap="gray"
+        )
+    )
+    scene.add_slice(
+        em.get_slice(
+            axis="z", 
+            index=0,
+            cmap="gray"
+        )
+    )
+    scene.add_slice(
+        em.get_slice(
+            axis="z", 
+            index=-1,
+            cmap="gray"
         )
     )
 
     scene.set_background("white")
     scene.set_anti_aliasing()
 
-    scene.set_camera_preset('x_back')
+    scene.set_camera_preset('x_front')
     # scene.set_camera([
     #     (2900, 12800, 1300),
     #     (2000, 2600, 2600),
@@ -1005,18 +1053,18 @@ if __name__ == '__main__':
     #     (0, 0, 1)
     # ])
 
-    # Pyvista rendering
-    from squirrel.library.render.pyvista_renderer import PyVistaRenderer
-    renderer = PyVistaRenderer(off_screen=True, image_size=(1000, 1000), world_scale=0.001)
-    renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
-    # renderer.show(scene)
+    # # Pyvista rendering
+    # from squirrel.library.render.pyvista_renderer import PyVistaRenderer
+    # renderer = PyVistaRenderer(off_screen=True, image_size=(1000, 1000), world_scale=0.001)
+    # renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
+    # # renderer.show(scene)
 
-    # # Blender rendering
-    # from squirrel.library.render.blender_renderer import BlenderRenderer
-    # renderer = BlenderRenderer(
-    #     samples=128,
-    #     output_size=(1000, 1000),
-    #     world_scale=0.001
-    # )
-    # renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
-    # # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))
+    # Blender rendering
+    from squirrel.library.render.blender_renderer import BlenderRenderer
+    renderer = BlenderRenderer(
+        samples=128,
+        output_size=(1000, 1000),
+        world_scale=0.001
+    )
+    renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
+    # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

@@ -155,6 +155,12 @@ class BlenderRenderer(Renderer):
                 np.asarray(volume.voxel_size, dtype=float)
                 * self.world_scale
             )
+            volume_origin = (
+                np.asarray(volume.origin, dtype=float)
+                * self.world_scale
+            )
+            sz, sy, sx = spacing
+            oz, oy, ox = volume_origin
 
             nz, ny, nx = data.shape
 
@@ -162,50 +168,19 @@ class BlenderRenderer(Renderer):
             index = em_slice.index
 
             if axis == "z":
-
                 image = data[index, :, :]
-
-                origin = [
-                    index * spacing[0],
-                    0.0,
-                    0.0,
-                ]
-
-                size = [
-                    (ny - 1) * spacing[1],
-                    (nx - 1) * spacing[2],
-                ]
+                origin = [ox, oy, oz + index * sz]
+                size = [(nx - 1) * sx, (ny - 1) * sy]
 
             elif axis == "y":
-
                 image = data[:, index, :]
-
-                origin = [
-                    0.0,
-                    index * spacing[1],
-                    0.0,
-                ]
-
-                size = [
-                    (nz - 1) * spacing[0],
-                    (nx - 1) * spacing[2],
-                ]
+                origin = [ox, oy + index * sy, oz]
+                size = [(nx - 1) * sx, (nz - 1) * sz]
 
             elif axis == "x":
-
                 image = data[:, :, index]
-
-                origin = [
-                    0.0,
-                    0.0,
-                    index * spacing[2],
-                ]
-
-                size = [
-                    (nz - 1) * spacing[0],
-                    (ny - 1) * spacing[1],
-                ]
-
+                origin = [ox + index * sx, oy, oz]
+                size = [(ny - 1) * sy, (nz - 1) * sz]
             else:
                 raise ValueError(
                     f"Invalid slice axis: {axis}"
@@ -292,14 +267,14 @@ class BlenderRenderer(Renderer):
             axis = scene.camera_preset[0]
 
             if axis == "z":
-                width = extent[2]   # numpy x
-                height = extent[1]  # numpy y
+                width = extent[0]   # world x
+                height = extent[1]  # world y
             elif axis == "y":
-                width = extent[2]   # numpy x
-                height = extent[0]  # numpy z
+                width = extent[0]   # world x
+                height = extent[2]  # world z
             elif axis == "x":
-                width = extent[1]   # numpy y
-                height = extent[0]  # numpy z
+                width = extent[1]   # world y
+                height = extent[2]  # world z
             else:
                 raise ValueError(
                     f"Invalid camera preset: {scene.camera_preset}"
@@ -329,10 +304,10 @@ class BlenderRenderer(Renderer):
             camera_up /= np.linalg.norm(camera_up)
 
             corners = np.array([
-                [z, y, x]
-                for z in (mins[0], maxs[0])
+                [x, y, z]
+                for x in (mins[0], maxs[0])
                 for y in (mins[1], maxs[1])
-                for x in (mins[2], maxs[2])
+                for z in (mins[2], maxs[2])
             ])
             offsets = corners - camera_focal
 
@@ -541,50 +516,38 @@ for i, s in enumerate(data.get("slices", [])):
     # -------------------------------------------------
     # Explicit geometry
     #
-    # Library world coordinates:
-    #   world 0 = numpy z
-    #   world 1 = numpy y
-    #   world 2 = numpy x
-    #
-    # UV convention:
-    #   U -> second image dimension (columns)
-    #   V -> first image dimension (rows)
-    # -------------------------------------------------
+    # Library/world coordinates are conventional Blender coordinates:
+    #   world X = numpy x, world Y = numpy y, world Z = numpy z.
+    # size stores the two in-plane dimensions in world-axis order.
 
     if axis == "z":
-
-        z = origin[0]
-        sy, sx = size
-
+        x0, y0, z = origin
+        sx, sy = size
         vertices = [
-            (z, 0,  0),
-            (z, 0,  sx),
-            (z, sy, sx),
-            (z, sy, 0),
+            (x0,      y0,      z),
+            (x0 + sx, y0,      z),
+            (x0 + sx, y0 + sy, z),
+            (x0,      y0 + sy, z),
         ]
 
     elif axis == "y":
-
-        y = origin[1]
-        sz, sx = size
-
+        x0, y, z0 = origin
+        sx, sz = size
         vertices = [
-            (0,  y, 0),
-            (0,  y, sx),
-            (sz, y, sx),
-            (sz, y, 0),
+            (x0,      y, z0),
+            (x0 + sx, y, z0),
+            (x0 + sx, y, z0 + sz),
+            (x0,      y, z0 + sz),
         ]
 
     elif axis == "x":
-
-        x = origin[2]
-        sz, sy = size
-
+        x, y0, z0 = origin
+        sy, sz = size
         vertices = [
-            (0,  0,  x),
-            (0,  sy, x),
-            (sz, sy, x),
-            (sz, 0,  x),
+            (x, y0,      z0),
+            (x, y0 + sy, z0),
+            (x, y0 + sy, z0 + sz),
+            (x, y0,      z0 + sz),
         ]
 
     else:

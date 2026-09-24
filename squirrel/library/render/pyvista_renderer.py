@@ -162,83 +162,52 @@ class PyVistaRenderer:
         volume = em_slice.volume
         data = volume.data
 
-        spacing = np.asarray(
-            volume.voxel_size,
-            dtype=float,
-        ) * self.world_scale
+        sz, sy, sx = (
+            np.asarray(volume.voxel_size, dtype=float)
+            * self.world_scale
+        )
+        oz, oy, ox = (
+            np.asarray(volume.origin, dtype=float)
+            * self.world_scale
+        )
 
         axis = em_slice.axis
         index = em_slice.index
-
         nz, ny, nx = data.shape
 
+        # Data stays (z, y, x); geometry is created in world (x, y, z).
         if axis == "z":
-
             image = data[index, :, :]
-
             yy, xx = np.meshgrid(
-                np.arange(ny) * spacing[1],
-                np.arange(nx) * spacing[2],
+                oy + np.arange(ny) * sy,
+                ox + np.arange(nx) * sx,
                 indexing="ij",
             )
-
-            zz = np.full_like(
-                yy,
-                index * spacing[0],
-            )
-
-            grid = pv.StructuredGrid(
-                zz,
-                yy,
-                xx,
-            )
+            zz = np.full_like(xx, oz + index * sz)
+            grid = pv.StructuredGrid(xx, yy, zz)
 
         elif axis == "y":
-
             image = data[:, index, :]
-
             zz, xx = np.meshgrid(
-                np.arange(nz) * spacing[0],
-                np.arange(nx) * spacing[2],
+                oz + np.arange(nz) * sz,
+                ox + np.arange(nx) * sx,
                 indexing="ij",
             )
-
-            yy = np.full_like(
-                zz,
-                index * spacing[1],
-            )
-
-            grid = pv.StructuredGrid(
-                zz,
-                yy,
-                xx,
-            )
+            yy = np.full_like(xx, oy + index * sy)
+            grid = pv.StructuredGrid(xx, yy, zz)
 
         elif axis == "x":
-
             image = data[:, :, index]
-
             zz, yy = np.meshgrid(
-                np.arange(nz) * spacing[0],
-                np.arange(ny) * spacing[1],
+                oz + np.arange(nz) * sz,
+                oy + np.arange(ny) * sy,
                 indexing="ij",
             )
-
-            xx = np.full_like(
-                zz,
-                index * spacing[2],
-            )
-
-            grid = pv.StructuredGrid(
-                zz,
-                yy,
-                xx,
-            )
+            xx = np.full_like(yy, ox + index * sx)
+            grid = pv.StructuredGrid(xx, yy, zz)
 
         else:
-            raise ValueError(
-                f"Invalid slice axis: {axis}"
-            )
+            raise ValueError(f"Invalid slice axis: {axis}")
 
         grid.point_data["em"] = image.ravel(order="F")
 
@@ -251,7 +220,7 @@ class PyVistaRenderer:
             show_scalar_bar=False,
             lighting=False,
         )
-            
+
     def _load_scene(self, scene):
 
         self.plotter.set_background(scene.background)
@@ -281,14 +250,14 @@ class PyVistaRenderer:
                 axis = scene.camera_preset[0]
 
                 if axis == "z":
-                    width = extent[2]   # numpy x
-                    height = extent[1]  # numpy y
+                    width = extent[0]   # world x
+                    height = extent[1]  # world y
                 elif axis == "y":
-                    width = extent[2]   # numpy x
-                    height = extent[0]  # numpy z
+                    width = extent[0]   # world x
+                    height = extent[2]  # world z
                 elif axis == "x":
-                    width = extent[1]   # numpy y
-                    height = extent[0]  # numpy z
+                    width = extent[1]   # world y
+                    height = extent[2]  # world z
                 else:
                     raise ValueError(
                         f"Invalid camera preset: {scene.camera_preset}"
@@ -323,10 +292,10 @@ class PyVistaRenderer:
                 up /= np.linalg.norm(up)
 
                 corners = np.array([
-                    [z, y, x]
-                    for z in (bounds_min[0], bounds_max[0])
+                    [x, y, z]
+                    for x in (bounds_min[0], bounds_max[0])
                     for y in (bounds_min[1], bounds_max[1])
-                    for x in (bounds_min[2], bounds_max[2])
+                    for z in (bounds_min[2], bounds_max[2])
                 ])
                 offsets = corners - focal
 

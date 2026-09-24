@@ -475,8 +475,8 @@ def make_slice_material(name, image_file, opacity=1.0):
         "ShaderNodeOutputMaterial"
     )
 
-    emission = nodes.new(
-        "ShaderNodeEmission"
+    bsdf = nodes.new(
+        "ShaderNodeBsdfPrincipled"
     )
 
     tex = nodes.new(
@@ -489,15 +489,29 @@ def make_slice_material(name, image_file, opacity=1.0):
     tex.image = image
     tex.interpolation = "Linear"
 
+    # Use the EM image as the diffuse/base color so the slice participates
+    # in normal scene lighting and can receive/cast Cycles shadows.
     links.new(
         tex.outputs["Color"],
-        emission.inputs["Color"],
+        bsdf.inputs["Base Color"],
     )
 
-    emission.inputs["Strength"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = 1.0
+    bsdf.inputs["Specular IOR Level"].default_value = 0.0
+
+    # Add a small self-illuminated contribution from the same image. This
+    # keeps EM contrast readable without making the plane fully emissive,
+    # which would suppress the visual effect of lighting and shadows.
+    links.new(
+        tex.outputs["Color"],
+        bsdf.inputs["Emission Color"],
+    )
+    bsdf.inputs["Emission Strength"].default_value = 0.05
+
+    bsdf.inputs["Alpha"].default_value = opacity
 
     links.new(
-        emission.outputs["Emission"],
+        bsdf.outputs["BSDF"],
         output.inputs["Surface"],
     )
 
@@ -718,11 +732,14 @@ light = bpy.data.objects.new(
     light_data,
 )
 
-light.location = center + mathutils.Vector((
-    diameter,
-    diameter,
-    1.5 * diameter,
-))
+# Keep the key light on roughly the same side as the camera, but offset it
+# in camera-space so illumination is not head-on and still produces shadows.
+light.location = (
+    center
+    - forward * (1.5 * diameter)
+    + right * (0.7 * diameter)
+    + up * (0.8 * diameter)
+)
 
 bpy.context.collection.objects.link(light)
 
@@ -738,6 +755,12 @@ light.rotation_euler = (
 
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
+
+# Store the intended color-management settings in the .blend itself so the
+# interactive Blender project matches the final scripted render.
+scene.view_settings.look = "AgX - High Contrast"
+scene.view_settings.exposure = 2.2
+scene.view_settings.gamma = 0.9
 
 # scene.render.resolution_x = width
 # scene.render.resolution_y = height

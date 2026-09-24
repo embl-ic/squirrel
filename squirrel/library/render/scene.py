@@ -793,6 +793,13 @@ class Scene:
 
     def set_camera(self, camera_position):
 
+        if isinstance(camera_position, str):
+            raise TypeError(
+                "set_camera() expects an explicit camera position. "
+                "For named views such as 'x_front', use "
+                "set_camera_preset('x_front')."
+            )
+
         self.camera_position = camera_position
         self.camera_flip_horizontal = False
         self.camera_preset = None

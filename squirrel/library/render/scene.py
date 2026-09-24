@@ -793,13 +793,6 @@ class Scene:
 
     def set_camera(self, camera_position):
 
-        if isinstance(camera_position, str):
-            raise TypeError(
-                "set_camera() expects an explicit camera position. "
-                "For named views such as 'x_front', use "
-                "set_camera_preset('x_front')."
-            )
-
         self.camera_position = camera_position
         self.camera_flip_horizontal = False
         self.camera_preset = None
@@ -844,22 +837,22 @@ class Scene:
             "y_front": {
                 "direction": (0, -1, 0),
                 "view_up": (0, 0, -1),
-                "flip_horizontal": False,
+                "flip_horizontal": True,
             },
             "y_back": {
                 "direction": (0, 1, 0),
                 "view_up": (0, 0, -1),
-                "flip_horizontal": False,
+                "flip_horizontal": True,
             },
             "x_front": {
                 "direction": (-1, 0, 0),
                 "view_up": (0, -1, 0),
-                "flip_horizontal": False,
+                "flip_horizontal": True,
             },
             "x_back": {
                 "direction": (1, 0, 0),
                 "view_up": (0, -1, 0),
-                "flip_horizontal": False,
+                "flip_horizontal": True,
             },
         }
 
@@ -889,6 +882,76 @@ class Scene:
         self.camera_flip_horizontal = settings["flip_horizontal"]
         self.camera_preset = preset
         self.camera_projection = projection
+
+        return self
+
+    def move_camera(self, axis, angle):
+        """Orbit the current camera around its focal point.
+
+        Parameters
+        ----------
+        axis : {"x", "y", "z"}
+            World-space axis around which to rotate the camera.
+        angle : float
+            Rotation angle in degrees. Positive angles follow the
+            right-hand rule around the selected world axis.
+
+        Notes
+        -----
+        The focal point and camera distance are preserved. The camera's
+        view-up vector is rotated by the same transform, so the complete
+        camera orientation follows the orbit. Consecutive calls are
+        cumulative.
+        """
+
+        if self.camera_position is None:
+            raise RuntimeError(
+                "move_camera() requires an existing camera. "
+                "Call set_camera() or set_camera_preset() first."
+            )
+
+        axis = axis.lower()
+        if axis not in {"x", "y", "z"}:
+            raise ValueError(
+                f"Invalid rotation axis: {axis!r}. "
+                "Expected 'x', 'y', or 'z'."
+            )
+
+        angle = np.deg2rad(float(angle))
+        c = np.cos(angle)
+        s = np.sin(angle)
+
+        if axis == "x":
+            rotation = np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, c, -s],
+                [0.0, s, c],
+            ])
+        elif axis == "y":
+            rotation = np.array([
+                [c, 0.0, s],
+                [0.0, 1.0, 0.0],
+                [-s, 0.0, c],
+            ])
+        else:
+            rotation = np.array([
+                [c, -s, 0.0],
+                [s, c, 0.0],
+                [0.0, 0.0, 1.0],
+            ])
+
+        position = np.asarray(self.camera_position[0], dtype=float)
+        focal_point = np.asarray(self.camera_position[1], dtype=float)
+        view_up = np.asarray(self.camera_position[2], dtype=float)
+
+        position = focal_point + rotation @ (position - focal_point)
+        view_up = rotation @ view_up
+
+        self.camera_position = [
+            tuple(position),
+            tuple(focal_point),
+            tuple(view_up),
+        ]
 
         return self
 
@@ -960,7 +1023,7 @@ if __name__ == '__main__':
         "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8_crystals.h5",
         "r",
     ) as f:
-        seg = f["data"][:]
+        seg = f["data"][:, :700, :700]
 
     print(seg.shape)
 
@@ -968,7 +1031,7 @@ if __name__ == '__main__':
         "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8.h5",
         "r",
     ) as f:
-        em_data = f["data"][:]
+        em_data = f["data"][:, :700, :700]
 
     # ------------------------------------------------------------------
     # Create objects and scene
@@ -1007,17 +1070,17 @@ if __name__ == '__main__':
     scene.add_slice(
         em.get_slice(
             axis="x",
-            index=700,
+            index=-1,
             cmap="gray",
         )
     )
-    scene.add_slice(
-        em.get_slice(
-            axis="y", 
-            index=0,
-            cmap="gray"
-        )
-    )
+    # scene.add_slice(
+    #     em.get_slice(
+    #         axis="y", 
+    #         index=0,
+    #         cmap="gray"
+    #     )
+    # )
     scene.add_slice(
         em.get_slice(
             axis="y", 
@@ -1032,18 +1095,21 @@ if __name__ == '__main__':
             cmap="gray"
         )
     )
-    scene.add_slice(
-        em.get_slice(
-            axis="z", 
-            index=-1,
-            cmap="gray"
-        )
-    )
+    # scene.add_slice(
+    #     em.get_slice(
+    #         axis="z", 
+    #         index=-1,
+    #         cmap="gray"
+    #     )
+    # )
 
     scene.set_background("white")
     scene.set_anti_aliasing()
 
     scene.set_camera_preset('x_front')
+    scene.move_camera('z', 20)
+    scene.move_camera('y', 7)
+
     # scene.set_camera([
     #     (2900, 12800, 1300),
     #     (2000, 2600, 2600),
@@ -1060,18 +1126,22 @@ if __name__ == '__main__':
     #     (0, 0, 1)
     # ])
 
-    # # Pyvista rendering
-    # from squirrel.library.render.pyvista_renderer import PyVistaRenderer
-    # renderer = PyVistaRenderer(off_screen=True, image_size=(1000, 1000), world_scale=0.001)
-    # renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
-    # # renderer.show(scene)
+    # Pyvista rendering
+    from squirrel.library.render.pyvista_renderer import PyVistaRenderer
+    renderer = PyVistaRenderer(off_screen=True, image_size=(1000, 1000), world_scale=0.001)
+    renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
+    # renderer.show(scene)
 
     # Blender rendering
     from squirrel.library.render.blender_renderer import BlenderRenderer
     renderer = BlenderRenderer(
         samples=128,
         output_size=(1000, 1000),
-        world_scale=0.001
+        world_scale=0.001,
+        light_placement="top-left",
+        light_angle=10,
+        em_slice_emission_strength=0.02,
+        light_temperature=4000
     )
     renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
     # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

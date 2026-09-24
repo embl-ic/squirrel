@@ -23,12 +23,45 @@ class BlenderRenderer(Renderer):
         output_size=(1200,1200),
         samples=128,
         world_scale=1e-3,
+        color_look="AgX - High Contrast",
+        exposure=1.5,
+        gamma=0.8,
+        light_placement="top-right",
+        light_angle=35.0,
+        light_power=300.0,
+        light_temperature=None,
+        world_strength=0.5,
+        em_slice_emission_strength=0.05,
     ):
         self.blender_executable = blender_executable
         self.template = template
         self.output_size = output_size
         self.samples = samples
         self.world_scale = world_scale
+
+        self.color_look = color_look
+        self.exposure = exposure
+        self.gamma = gamma
+
+        valid_placements = {
+            "top-left", "top", "top-right",
+            "left", "center", "right",
+            "bottom-left", "bottom", "bottom-right",
+        }
+        if light_placement not in valid_placements:
+            raise ValueError(
+                f"Invalid light_placement: {light_placement}. "
+                f"Expected one of {sorted(valid_placements)}."
+            )
+        if not 0 <= light_angle < 90:
+            raise ValueError("light_angle must be in the range [0, 90).")
+
+        self.light_placement = light_placement
+        self.light_angle = float(light_angle)
+        self.light_power = float(light_power)
+        self.light_temperature = light_temperature
+        self.world_strength = float(world_strength)
+        self.em_slice_emission_strength = float(em_slice_emission_strength)
 
     def show(self, scene):
         raise NotImplementedError(
@@ -53,12 +86,14 @@ class BlenderRenderer(Renderer):
         self.render_blend(
             blend_file,
             filename,
+            flip_horizontal=scene.camera_flip_horizontal,
         )
 
     def render_blend(
         self,
         blend_file,
         output_file,
+        flip_horizontal=False,
     ):
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,6 +135,15 @@ class BlenderRenderer(Renderer):
                 raise RuntimeError(
                     f"Blender failed with exit code {process.returncode}"
                 )
+
+            # camera_flip_horizontal is an image-space reflection, not a camera
+            # rotation. Apply it to the finished render so Blender matches the
+            # preset semantics used by the other renderers.
+            if flip_horizontal:
+                from PIL import Image
+
+                with Image.open(output_file) as image:
+                    image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(output_file)
 
     def _export_scene(
         self,
@@ -355,6 +399,18 @@ class BlenderRenderer(Renderer):
 
             "background": scene.background,
 
+            "render_settings": {
+                "color_look": self.color_look,
+                "exposure": self.exposure,
+                "gamma": self.gamma,
+                "world_strength": self.world_strength,
+                "em_slice_emission_strength": self.em_slice_emission_strength,
+                "light_placement": self.light_placement,
+                "light_angle": self.light_angle,
+                "light_power": self.light_power,
+                "light_temperature": self.light_temperature,
+            },
+
             "bounds": {
                 "center": center.tolist(),
                 "extent": extent.tolist(),
@@ -405,6 +461,15 @@ with open(scene_json) as f:
 # materials
 # -------------------------------------------------
 
+def srgb_to_linear(value):
+    # Palette colors are supplied as sRGB values (e.g. from a hex color).
+    # Blender shader sockets store scene-linear RGB, while Blender's hex
+    # color field displays the corresponding sRGB value.
+    if value <= 0.04045:
+        return value / 12.92
+    return ((value + 0.055) / 1.055) ** 2.4
+
+
 def make_material(name, color):
 
     mat = bpy.data.materials.new(name)
@@ -415,19 +480,24 @@ def make_material(name, color):
         .get("Principled BSDF")
     )
 
+    color_linear = tuple(
+        srgb_to_linear(channel)
+        for channel in color[:3]
+    )
+
     bsdf.inputs["Base Color"].default_value = (
-        color[0],
-        color[1],
-        color[2],
+        color_linear[0],
+        color_linear[1],
+        color_linear[2],
         1.0,
     )
 
     bsdf.inputs["Roughness"].default_value = 0.7
 
     bsdf.inputs["Emission Color"].default_value = (
-        color[0],
-        color[1],
-        color[2],
+        color_linear[0],
+        color_linear[1],
+        color_linear[2],
         1.0,
     )
 
@@ -506,7 +576,7 @@ def make_slice_material(name, image_file, opacity=1.0):
         tex.outputs["Color"],
         bsdf.inputs["Emission Color"],
     )
-    bsdf.inputs["Emission Strength"].default_value = 0.05
+    bsdf.inputs["Emission Strength"].default_value = data["render_settings"]["em_slice_emission_strength"]
 
     bsdf.inputs["Alpha"].default_value = opacity
 
@@ -707,7 +777,9 @@ bg.inputs["Color"].default_value = (
     1.0,
 )
 
-bg.inputs["Strength"].default_value = 0.08
+settings = data["render_settings"]
+
+bg.inputs["Strength"].default_value = settings["world_strength"]
 
 # Add area light
 
@@ -723,23 +795,42 @@ light_data = bpy.data.lights.new(
     type="AREA",
 )
 
-light_data.energy = 150
+light_data.energy = settings["light_power"]
 light_data.shape = "SQUARE"
 light_data.size = 2.0 * diameter
+
+if settings["light_temperature"] is not None:
+    light_data.use_temperature = True
+    light_data.temperature = settings["light_temperature"]
 
 light = bpy.data.objects.new(
     "Key",
     light_data,
 )
 
-# Keep the key light on roughly the same side as the camera, but offset it
-# in camera-space so illumination is not head-on and still produces shadows.
-light.location = (
-    center
-    - forward * (1.5 * diameter)
-    + right * (0.7 * diameter)
-    + up * (0.8 * diameter)
-)
+# Place the key light relative to the camera. light_angle is the angular
+# displacement away from the camera axis toward the selected screen direction.
+placement_vectors = {
+    "top-left": (-1, 1),
+    "top": (0, 1),
+    "top-right": (1, 1),
+    "left": (-1, 0),
+    "center": (0, 0),
+    "right": (1, 0),
+    "bottom-left": (-1, -1),
+    "bottom": (0, -1),
+    "bottom-right": (1, -1),
+}
+
+px, py = placement_vectors[settings["light_placement"]]
+offset = right * px + up * py
+if offset.length > 0:
+    offset.normalize()
+
+angle = math.radians(settings["light_angle"])
+light_direction = (-forward * math.cos(angle) + offset * math.sin(angle)).normalized()
+light_distance = 1.5 * diameter
+light.location = center + light_direction * light_distance
 
 bpy.context.collection.objects.link(light)
 
@@ -758,9 +849,9 @@ scene.render.engine = "CYCLES"
 
 # Store the intended color-management settings in the .blend itself so the
 # interactive Blender project matches the final scripted render.
-scene.view_settings.look = "AgX - High Contrast"
-scene.view_settings.exposure = 2.2
-scene.view_settings.gamma = 0.9
+scene.view_settings.look = settings["color_look"]
+scene.view_settings.exposure = settings["exposure"]
+scene.view_settings.gamma = settings["gamma"]
 
 # scene.render.resolution_x = width
 # scene.render.resolution_y = height
@@ -842,10 +933,6 @@ scene.cycles.use_denoising = True
 scene.render.resolution_x = width
 scene.render.resolution_y = height
 scene.render.resolution_percentage = 100
-
-scene.view_settings.look = "AgX - High Contrast"
-scene.view_settings.exposure = 2.2
-scene.view_settings.gamma = 0.9
 
 scene.render.film_transparent = True
 

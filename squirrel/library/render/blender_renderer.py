@@ -746,6 +746,9 @@ up = mathutils.Vector(c["up"]).normalized()
 # Build the camera basis explicitly so Scene.view_up is preserved.
 right = forward.cross(up).normalized()
 up = right.cross(forward).normalized()
+# Track camera-up explicitly.  Do not recover it later from matrix_world:
+# Blender's object transform and our scene reflection are separate concerns.
+final_camera_up = up.copy()
 
 rotation = mathutils.Matrix((
     right,
@@ -755,12 +758,11 @@ rotation = mathutils.Matrix((
 
 cam.rotation_euler = rotation.to_euler()
 
-# Represent the Scene horizontal reflection in the Blender camera itself so
-# the saved .blend camera view and the rendered PNG have the same orientation.
-# A negative local-X scale reflects the camera frame without changing the
-# geometry or the library/world coordinate convention.
-if c.get("flip_horizontal", False):
-    cam.scale.x = -1.0
+# Keep the Blender camera transform conventional.  Horizontal reflection,
+# when requested, is applied to the exported scene geometry below instead of
+# using a negative camera scale.  A reflected camera transform confuses
+# Blender's camera/viewport navigation.
+cam.scale = (1.0, 1.0, 1.0)
 
 cam_data.clip_start = 0.1
 cam_data.clip_end = 100000
@@ -790,64 +792,15 @@ settings = data["render_settings"]
 
 bg.inputs["Strength"].default_value = settings["world_strength"]
 
-# Add area light
+# Light creation is intentionally deferred until after any upright-scene
+# transform/reflection.  Placement semantics (top-left, right, etc.) are
+# screen-relative, so they must be evaluated in the final camera basis.
 
 bounds = data["bounds"]
-
 center = mathutils.Vector(bounds["center"])
 extent = mathutils.Vector(bounds["extent"])
-
 diameter = max(extent)
-
-light_data = bpy.data.lights.new(
-    "Key",
-    type="AREA",
-)
-
-light_data.energy = settings["light_power"]
-light_data.shape = "SQUARE"
-light_data.size = 2.0 * diameter
-
-if settings["light_temperature"] is not None:
-    light_data.use_temperature = True
-    light_data.temperature = settings["light_temperature"]
-
-light = bpy.data.objects.new(
-    "Key",
-    light_data,
-)
-
-# Place the key light relative to the camera. light_angle is the angular
-# displacement away from the camera axis toward the selected screen direction.
-placement_vectors = {
-    "top-left": (-1, 1),
-    "top": (0, 1),
-    "top-right": (1, 1),
-    "left": (-1, 0),
-    "center": (0, 0),
-    "right": (1, 0),
-    "bottom-left": (-1, -1),
-    "bottom": (0, -1),
-    "bottom-right": (1, -1),
-}
-
-px, py = placement_vectors[settings["light_placement"]]
-offset = right * px + up * py
-if offset.length > 0:
-    offset.normalize()
-
-angle = math.radians(settings["light_angle"])
-light_direction = (-forward * math.cos(angle) + offset * math.sin(angle)).normalized()
-light_distance = 1.5 * diameter
-light.location = center + light_direction * light_distance
-
-bpy.context.collection.objects.link(light)
-
-light.rotation_euler = (
-    (center - light.location)
-    .to_track_quat("-Z", "Y")
-    .to_euler()
-)
+final_center = center.copy()
 
 # -------------------------------------------------
 # Optional Blender workspace orientation
@@ -898,8 +851,10 @@ if settings.get("upright_scene", False):
     upright_matrix = upright_rotation.to_4x4()
     translation_matrix = mathutils.Matrix.Translation(floor_offset)
     world_transform = translation_matrix @ upright_matrix
+    final_center = world_transform @ center
 
-    # Geometry and lights receive one common rigid world transform.
+    # Geometry receives one common rigid world transform.  The key light is
+    # created later, directly in the final camera/world coordinate system.
     for obj in list(bpy.context.scene.objects):
         if obj is not cam:
             obj.matrix_world = world_transform @ obj.matrix_world
@@ -915,6 +870,7 @@ if settings.get("upright_scene", False):
         upright_rotation @ mathutils.Vector(c["focal_point"])
         + floor_offset
     )
+    target = cam_target
     cam_up = (
         upright_rotation @ mathutils.Vector(c["up"])
     ).normalized()
@@ -924,6 +880,7 @@ if settings.get("upright_scene", False):
     cam_forward = (cam_target - cam.location).normalized()
     cam_right = cam_forward.cross(cam_up).normalized()
     cam_up = cam_right.cross(cam_forward).normalized()
+    final_camera_up = cam_up.copy()
 
     cam_rotation = mathutils.Matrix((
         cam_right,
@@ -933,8 +890,189 @@ if settings.get("upright_scene", False):
 
     cam.rotation_euler = cam_rotation.to_euler()
     cam.scale = (1.0, 1.0, 1.0)
-    if c.get("flip_horizontal", False):
-        cam.scale.x = -1.0
+
+    # Canonical preset direction after the upright transform.  This is used
+    # only for the saved working viewport; it is independent of camera orbit.
+    preset_view_dirs = {
+        "x_front": (-1.0, 0.0, 0.0),
+        "x_back":  ( 1.0, 0.0, 0.0),
+        "y_front": (0.0, -1.0, 0.0),
+        "y_back":  (0.0,  1.0, 0.0),
+        "z_front": (0.0, 0.0, -1.0),
+        "z_back":  (0.0, 0.0,  1.0),
+    }
+    canonical_forward = (
+        upright_rotation @ mathutils.Vector(preset_view_dirs[preset])
+    ).normalized()
+
+    # Save a useful non-camera viewport as well.  It is aligned to the
+    # canonical preset side (front/back), while NUM0 still enters the exact
+    # render camera including any Scene.move_camera() orbit.
+    # RegionView3D uses a view quaternion, not a camera object's transform.
+    # Build it from Blender's standard viewing convention directly: local -Z
+    # looks toward the specimen and local +Y is visual up.  Keeping +Z as the
+    # canonical workspace up prevents the saved viewport from opening on its
+    # side even though the render camera may be oblique.
+    # Use Blender's *native standard-view quaternions* instead of converting
+    # the render-camera basis into RegionView3D coordinates.  RegionView3D's
+    # quaternion convention is different from a camera object's transform;
+    # using a camera-style track quaternion here is what caused the saved
+    # viewport to open with a 90-degree roll.
+    #
+    # canonical_forward points from the viewer toward the specimen.  After
+    # the upright transform it is axis-aligned, so select the corresponding
+    # Blender standard view (the same orientations used by the numpad views).
+    sqrt_half = 2.0 ** -0.5
+    standard_views = {
+        # view type: (forward direction, RegionView3D.view_rotation)
+        "FRONT":  (mathutils.Vector(( 0.0,  1.0,  0.0)), mathutils.Quaternion((sqrt_half, sqrt_half, 0.0, 0.0))),
+        "BACK":   (mathutils.Vector(( 0.0, -1.0,  0.0)), mathutils.Quaternion((0.0, 0.0, sqrt_half, sqrt_half))),
+        "RIGHT":  (mathutils.Vector((-1.0,  0.0,  0.0)), mathutils.Quaternion((0.5, 0.5, 0.5, 0.5))),
+        "LEFT":   (mathutils.Vector(( 1.0,  0.0,  0.0)), mathutils.Quaternion((0.5, 0.5, -0.5, -0.5))),
+        "TOP":    (mathutils.Vector(( 0.0,  0.0, -1.0)), mathutils.Quaternion((1.0, 0.0, 0.0, 0.0))),
+        "BOTTOM": (mathutils.Vector(( 0.0,  0.0,  1.0)), mathutils.Quaternion((0.0, 1.0, 0.0, 0.0))),
+    }
+    # Open the workspace from the opposite member of Blender's standard
+    # front/back pair.  Blender's axis gizmo describes the direction from
+    # the specimen toward the viewer, whereas canonical_forward describes
+    # the direction from the viewer toward the specimen.
+    viewport_forward = -canonical_forward
+    viewport_view = max(
+        standard_views,
+        key=lambda name: viewport_forward.dot(standard_views[name][0]),
+    )
+    viewport_rotation = standard_views[viewport_view][1]
+
+    # Configure every saved 3D viewport so opening the .blend starts from the
+    # canonical preset side with Blender +Z visually upward.  Keep perspective
+    # projection for a comfortable working view; only the orientation comes
+    # from Blender's standard numpad view.
+    view_center = cam_target.copy()
+    view_distance = max(diameter * 2.5, 0.001)
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            space = area.spaces.active
+            region_3d = space.region_3d
+            region_3d.view_perspective = "PERSP"
+            region_3d.view_location = view_center
+            region_3d.view_distance = view_distance
+            region_3d.view_rotation = viewport_rotation
+
+# -------------------------------------------------
+# horizontal image orientation
+# -------------------------------------------------
+
+# The Fiji-style horizontal flip belongs to the exported scene, never to the
+# Blender camera.  Apply it in BOTH upright modes.  Earlier revisions placed
+# this block only inside upright_scene=True, which silently removed mirroring
+# for the normal Blender export.
+if c.get("flip_horizontal", False):
+    preset = c.get("preset")
+    if preset is None:
+        raise RuntimeError(
+            "Horizontal camera flipping requires a camera preset."
+        )
+
+    preset_view_dirs = {
+        "x_front": (-1.0, 0.0, 0.0),
+        "x_back":  ( 1.0, 0.0, 0.0),
+        "y_front": (0.0, -1.0, 0.0),
+        "y_back":  (0.0,  1.0, 0.0),
+        "z_front": (0.0, 0.0, -1.0),
+        "z_back":  (0.0, 0.0,  1.0),
+    }
+    preset_up_dirs = {
+        "x_front": (0.0, -1.0, 0.0),
+        "x_back":  (0.0, -1.0, 0.0),
+        "y_front": (0.0, 0.0, -1.0),
+        "y_back":  (0.0, 0.0, -1.0),
+        "z_front": (0.0, -1.0, 0.0),
+        "z_back":  (0.0, -1.0, 0.0),
+    }
+
+    canonical_forward = mathutils.Vector(preset_view_dirs[preset])
+    canonical_up = mathutils.Vector(preset_up_dirs[preset])
+    if settings.get("upright_scene", False):
+        canonical_forward = upright_rotation @ canonical_forward
+        canonical_up = upright_rotation @ canonical_up
+    canonical_forward.normalize()
+    canonical_up.normalize()
+    canonical_right = canonical_forward.cross(canonical_up).normalized()
+
+    r = canonical_right
+    reflection3 = mathutils.Matrix.Identity(3) - 2.0 * mathutils.Matrix((
+        (r.x * r.x, r.x * r.y, r.x * r.z),
+        (r.y * r.x, r.y * r.y, r.y * r.z),
+        (r.z * r.x, r.z * r.y, r.z * r.z),
+    ))
+    reflection4 = reflection3.to_4x4()
+    reflection_about_target = (
+        mathutils.Matrix.Translation(target)
+        @ reflection4
+        @ mathutils.Matrix.Translation(-target)
+    )
+    for obj in list(bpy.context.scene.objects):
+        if obj is not cam:
+            obj.matrix_world = reflection_about_target @ obj.matrix_world
+    final_center = reflection_about_target @ final_center
+
+# -------------------------------------------------
+# final camera-relative lighting
+# -------------------------------------------------
+
+# Recompute the basis from the final Blender camera.  This is deliberately
+# done after upright_scene and horizontal reflection so placement names keep
+# exactly the same screen-space meaning in both upright modes.
+final_forward = (target - cam.location).normalized()
+final_up = final_camera_up.normalized()
+final_right = final_forward.cross(final_up).normalized()
+final_up = final_right.cross(final_forward).normalized()
+
+light_data = bpy.data.lights.new(
+    "Key",
+    type="AREA",
+)
+light_data.energy = settings["light_power"]
+light_data.shape = "SQUARE"
+light_data.size = 2.0 * diameter
+
+if settings["light_temperature"] is not None:
+    light_data.use_temperature = True
+    light_data.temperature = settings["light_temperature"]
+
+light = bpy.data.objects.new("Key", light_data)
+bpy.context.collection.objects.link(light)
+
+placement_vectors = {
+    "top-left": (-1, 1),
+    "top": (0, 1),
+    "top-right": (1, 1),
+    "left": (-1, 0),
+    "center": (0, 0),
+    "right": (1, 0),
+    "bottom-left": (-1, -1),
+    "bottom": (0, -1),
+    "bottom-right": (1, -1),
+}
+px, py = placement_vectors[settings["light_placement"]]
+offset = final_right * px + final_up * py
+if offset.length > 0:
+    offset.normalize()
+
+angle = math.radians(settings["light_angle"])
+light_direction = (
+    -final_forward * math.cos(angle)
+    + offset * math.sin(angle)
+).normalized()
+light_distance = 1.5 * diameter
+light.location = final_center + light_direction * light_distance
+light.rotation_euler = (
+    (final_center - light.location)
+    .to_track_quat("-Z", "Y")
+    .to_euler()
+)
 
 # -------------------------------------------------
 # render

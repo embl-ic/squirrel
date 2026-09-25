@@ -71,6 +71,9 @@ class PyVistaRenderer:
     # Internal helpers
     def _apply_colors(self, obj):
 
+        if obj.mesh is None or obj.mesh.n_faces_strict == 0:
+            return
+
         cmap = make_colormap(
             base_color=obj.color,
             hue_shift=np.abs(obj.hue_shift),

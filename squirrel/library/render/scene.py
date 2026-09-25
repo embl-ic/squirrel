@@ -295,10 +295,24 @@ class SegmentObject:
 
         self.mesh = self.raw_mesh.copy()
 
-        self.mesh = self.mesh.compute_normals(
-            auto_orient_normals=True,
-            inplace=False,
-        )
+        # ``compute_normals`` requires polygonal cells. Very small or
+        # degenerate segments can produce only vertices/lines (or no cells)
+        # after contour extraction. Keep the mesh, but skip normal generation
+        # so one such segment does not abort processing of the full volume.
+        if self.mesh.n_faces > 0:
+            self.mesh = self.mesh.compute_normals(
+                auto_orient_normals=True,
+                inplace=False,
+            )
+        else:
+            import warnings
+            warnings.warn(
+                f"Segment {self.label} produced no polygon faces "
+                f"({self.mesh.n_points} points, {self.mesh.n_cells} cells); "
+                "skipping normal computation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         if cache_file:
             self.raw_mesh.save(cache_file)
@@ -893,7 +907,7 @@ class Scene:
 
         return self
 
-    def move_camera(self, axis, angle):
+    def rotate_camera(self, axis, angle):
         """Orbit the current camera around its focal point.
 
         Parameters
@@ -914,7 +928,7 @@ class Scene:
 
         if self.camera_position is None:
             raise RuntimeError(
-                "move_camera() requires an existing camera. "
+                "rotate_camera() requires an existing camera. "
                 "Call set_camera() or set_camera_preset() first."
             )
 
@@ -1031,7 +1045,7 @@ if __name__ == '__main__':
         "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8_crystals.h5",
         "r",
     ) as f:
-        seg = f["data"][:, :740, -840:]
+        seg = f["data"][:, :890, :830]
 
     print(seg.shape)
 
@@ -1039,7 +1053,7 @@ if __name__ == '__main__':
         "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8.h5",
         "r",
     ) as f:
-        em_data = f["data"][:, :740, -840:]
+        em_data = f["data"][:, :890, :830]
 
     # ------------------------------------------------------------------
     # Create objects and scene
@@ -1075,44 +1089,14 @@ if __name__ == '__main__':
         voxel_size=(50, 5, 5),
     )
 
-    # # ---
-    # # Slices for x_front
-    # scene.add_slice(
-    #     em.get_slice(
-    #         axis="x",
-    #         index=-1,
-    #         cmap="gray",
-    #         interpolation="nearest"
-    #     )
-    # )
-
-    # scene.add_slice(
-    #     em.get_slice(
-    #         axis="y", 
-    #         index=-1,
-    #         cmap="gray",
-    #         interpolation="nearest"
-    #     )
-    # )
-    # scene.add_slice(
-    #     em.get_slice(
-    #         axis="z", 
-    #         index=0,
-    #         cmap="gray",
-    #         interpolation="nearest"
-    #     )
-    # )
-    # ---
-    # Slices for x_back
     scene.add_slice(
         em.get_slice(
             axis="x",
-            index=0,
+            index=-1,
             cmap="gray",
             interpolation="nearest"
         )
     )
-
     scene.add_slice(
         em.get_slice(
             axis="y", 
@@ -1129,30 +1113,13 @@ if __name__ == '__main__':
             interpolation="nearest"
         )
     )
-    # ---
 
     scene.set_background("white")
     scene.set_anti_aliasing()
 
-    scene.set_camera_preset('x_back')
-    scene.move_camera('z', -20)
-    scene.move_camera('y', -7)
-
-    # scene.set_camera([
-    #     (2900, 12800, 1300),
-    #     (2000, 2600, 2600),
-    #     (0, 0, 1),
-    # ])
-    # scene.set_camera([
-    #     (10000, 12800, 3200), 
-    #     (2500, 2600.0, 3200), 
-    #     (0, 0, 1)
-    # ])
-    # scene.set_camera([
-    #     (15000, 2600, 3200), 
-    #     (2500.0, 2600.0, 3200.0), 
-    #     (0, 0, 1)
-    # ])
+    scene.set_camera_preset('x_front')
+    scene.rotate_camera('z', 20)
+    scene.rotate_camera('y', 7)
 
     # Pyvista rendering
     from squirrel.library.render.pyvista_renderer import PyVistaRenderer

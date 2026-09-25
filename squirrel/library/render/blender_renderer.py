@@ -157,6 +157,9 @@ class BlenderRenderer(Renderer):
 
         for i, obj in enumerate(scene.objects):
 
+            if obj.mesh is None or obj.mesh.n_faces_strict == 0:
+                continue
+
             mesh_file = export_dir / f"object_{i}.ply"
 
             mesh = obj.mesh.copy()
@@ -404,6 +407,8 @@ class BlenderRenderer(Renderer):
                 "light_power": self.light_power,
                 "light_temperature": self.light_temperature,
                 "upright_scene": self.upright_scene,
+                "output_size": list(self.output_size),
+                "samples": self.samples,
             },
 
             "bounds": {
@@ -808,7 +813,7 @@ final_center = center.copy()
 
 # Keep the Blender workspace axis-aligned.  The upright transform is derived
 # only from the canonical camera preset, never from the final (possibly
-# orbited) camera orientation.  This means Scene.move_camera() remains a
+# orbited) camera orientation.  This means Scene.rotate_camera() remains a
 # camera movement and cannot tilt the exported specimen.
 if settings.get("upright_scene", False):
     preset = c.get("preset")
@@ -907,7 +912,7 @@ if settings.get("upright_scene", False):
 
     # Save a useful non-camera viewport as well.  It is aligned to the
     # canonical preset side (front/back), while NUM0 still enters the exact
-    # render camera including any Scene.move_camera() orbit.
+    # render camera including any Scene.rotate_camera() orbit.
     # RegionView3D uses a view quaternion, not a camera object's transform.
     # Build it from Blender's standard viewing convention directly: local -Z
     # looks toward the specimen and local +Y is visual up.  Keeping +Z as the
@@ -1087,9 +1092,11 @@ scene.view_settings.look = settings["color_look"]
 scene.view_settings.exposure = settings["exposure"]
 scene.view_settings.gamma = settings["gamma"]
 
-# scene.render.resolution_x = width
-# scene.render.resolution_y = height
-# scene.cycles.samples = samples
+width, height = settings["output_size"]
+scene.render.resolution_x = int(width)
+scene.render.resolution_y = int(height)
+scene.render.resolution_percentage = 100
+scene.cycles.samples = int(settings["samples"])
 
 bpy.ops.wm.save_as_mainfile(
     filepath=output

@@ -32,6 +32,7 @@ class BlenderRenderer(Renderer):
         light_temperature=None,
         world_strength=0.5,
         em_slice_emission_strength=0.05,
+        upright_scene=False,
     ):
         self.blender_executable = blender_executable
         self.template = template
@@ -62,6 +63,7 @@ class BlenderRenderer(Renderer):
         self.light_temperature = light_temperature
         self.world_strength = float(world_strength)
         self.em_slice_emission_strength = float(em_slice_emission_strength)
+        self.upright_scene = bool(upright_scene)
 
     def show(self, scene):
         raise NotImplementedError(
@@ -86,14 +88,12 @@ class BlenderRenderer(Renderer):
         self.render_blend(
             blend_file,
             filename,
-            flip_horizontal=scene.camera_flip_horizontal,
         )
 
     def render_blend(
         self,
         blend_file,
         output_file,
-        flip_horizontal=False,
     ):
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,14 +136,6 @@ class BlenderRenderer(Renderer):
                     f"Blender failed with exit code {process.returncode}"
                 )
 
-            # camera_flip_horizontal is an image-space reflection, not a camera
-            # rotation. Apply it to the finished render so Blender matches the
-            # preset semantics used by the other renderers.
-            if flip_horizontal:
-                from PIL import Image
-
-                with Image.open(output_file) as image:
-                    image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(output_file)
 
     def _export_scene(
         self,
@@ -274,6 +266,7 @@ class BlenderRenderer(Renderer):
                     "origin": origin,
                     "size": size,
                     "opacity": em_slice.opacity,
+                    "interpolation": em_slice.interpolation,
                 }
             )
 
@@ -395,6 +388,7 @@ class BlenderRenderer(Renderer):
                 "projection": camera_projection,
                 "ortho_scale": ortho_scale,
                 "flip_horizontal": scene.camera_flip_horizontal,
+                "preset": scene.camera_preset,
             },
 
             "background": scene.background,
@@ -409,6 +403,7 @@ class BlenderRenderer(Renderer):
                 "light_angle": self.light_angle,
                 "light_power": self.light_power,
                 "light_temperature": self.light_temperature,
+                "upright_scene": self.upright_scene,
             },
 
             "bounds": {
@@ -531,7 +526,7 @@ for obj in data["objects"]:
 # EM slice materials
 # -------------------------------------------------
 
-def make_slice_material(name, image_file, opacity=1.0):
+def make_slice_material(name, image_file, opacity=1.0, interpolation="linear"):
 
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -557,7 +552,13 @@ def make_slice_material(name, image_file, opacity=1.0):
     image.pack()
 
     tex.image = image
-    tex.interpolation = "Linear"
+
+    if interpolation == "nearest":
+        tex.interpolation = "Closest"
+    elif interpolation == "linear":
+        tex.interpolation = "Linear"
+    else:
+        raise ValueError(f"Invalid EM slice interpolation: {interpolation}")
 
     # Use the EM image as the diffuse/base color so the slice participates
     # in normal scene lighting and can receive/cast Cycles shadows.
@@ -696,6 +697,7 @@ for i, s in enumerate(data.get("slices", [])):
         f"EM_slice_material_{i}",
         s["image"],
         s["opacity"],
+        s.get("interpolation", "linear"),
     )
 
     plane.data.materials.append(mat)
@@ -752,6 +754,13 @@ rotation = mathutils.Matrix((
 )).transposed()
 
 cam.rotation_euler = rotation.to_euler()
+
+# Represent the Scene horizontal reflection in the Blender camera itself so
+# the saved .blend camera view and the rendered PNG have the same orientation.
+# A negative local-X scale reflects the camera frame without changing the
+# geometry or the library/world coordinate convention.
+if c.get("flip_horizontal", False):
+    cam.scale.x = -1.0
 
 cam_data.clip_start = 0.1
 cam_data.clip_end = 100000
@@ -839,6 +848,93 @@ light.rotation_euler = (
     .to_track_quat("-Z", "Y")
     .to_euler()
 )
+
+# -------------------------------------------------
+# Optional Blender workspace orientation
+# -------------------------------------------------
+
+# Keep the Blender workspace axis-aligned.  The upright transform is derived
+# only from the canonical camera preset, never from the final (possibly
+# orbited) camera orientation.  This means Scene.move_camera() remains a
+# camera movement and cannot tilt the exported specimen.
+if settings.get("upright_scene", False):
+    preset = c.get("preset")
+    if preset is None:
+        raise RuntimeError(
+            "upright_scene=True requires a camera preset. "
+            "Call scene.set_camera_preset(...) before rendering."
+        )
+
+    # Canonical preset up vectors, in library/world coordinates.  Use exact
+    # axis rotations so the specimen remains aligned to Blender's axes.
+    if preset in {"x_front", "x_back", "z_front", "z_back"}:
+        # (0, -1, 0) -> Blender +Z
+        upright_rotation = mathutils.Matrix.Rotation(
+            math.radians(-90.0), 3, "X"
+        )
+    elif preset in {"y_front", "y_back"}:
+        # (0, 0, -1) -> Blender +Z
+        upright_rotation = mathutils.Matrix.Rotation(
+            math.radians(180.0), 3, "X"
+        )
+    else:
+        raise ValueError(f"Unsupported camera preset for upright scene: {preset}")
+
+    # Rotate the complete source bounds and then translate vertically so the
+    # lowest point of the specimen sits exactly on Blender's XY floor (Z=0).
+    b_center = mathutils.Vector(bounds["center"])
+    b_extent = mathutils.Vector(bounds["extent"])
+    b_min = b_center - 0.5 * b_extent
+    b_max = b_center + 0.5 * b_extent
+
+    corners = [
+        upright_rotation @ mathutils.Vector((x, y, z))
+        for x in (b_min.x, b_max.x)
+        for y in (b_min.y, b_max.y)
+        for z in (b_min.z, b_max.z)
+    ]
+    floor_offset = mathutils.Vector((0.0, 0.0, -min(v.z for v in corners)))
+
+    upright_matrix = upright_rotation.to_4x4()
+    translation_matrix = mathutils.Matrix.Translation(floor_offset)
+    world_transform = translation_matrix @ upright_matrix
+
+    # Geometry and lights receive one common rigid world transform.
+    for obj in list(bpy.context.scene.objects):
+        if obj is not cam:
+            obj.matrix_world = world_transform @ obj.matrix_world
+
+    # Transform the camera position/focal point explicitly.  Its up vector is
+    # rotated but, correctly, not translated.  Rebuilding the basis avoids
+    # decomposing a reflected camera matrix.
+    cam_position = (
+        upright_rotation @ mathutils.Vector(c["position"])
+        + floor_offset
+    )
+    cam_target = (
+        upright_rotation @ mathutils.Vector(c["focal_point"])
+        + floor_offset
+    )
+    cam_up = (
+        upright_rotation @ mathutils.Vector(c["up"])
+    ).normalized()
+
+    cam.location = cam_position
+
+    cam_forward = (cam_target - cam.location).normalized()
+    cam_right = cam_forward.cross(cam_up).normalized()
+    cam_up = cam_right.cross(cam_forward).normalized()
+
+    cam_rotation = mathutils.Matrix((
+        cam_right,
+        cam_up,
+        -cam_forward,
+    )).transposed()
+
+    cam.rotation_euler = cam_rotation.to_euler()
+    cam.scale = (1.0, 1.0, 1.0)
+    if c.get("flip_horizontal", False):
+        cam.scale.x = -1.0
 
 # -------------------------------------------------
 # render

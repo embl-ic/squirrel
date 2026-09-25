@@ -677,7 +677,14 @@ class EMSlice:
         cmap="gray",
         clim=None,
         opacity=1.0,
+        interpolation="linear",
     ):
+        if interpolation not in {"linear", "nearest"}:
+            raise ValueError(
+                f"Invalid interpolation: {interpolation!r}. "
+                "Expected 'linear' or 'nearest'."
+            )
+
         self.volume = volume
         self.axis = axis
         self.index = index
@@ -685,6 +692,7 @@ class EMSlice:
         self.cmap = cmap
         self.clim = clim
         self.opacity = opacity
+        self.interpolation = interpolation
 
     
 class EMVolume:
@@ -1072,6 +1080,7 @@ if __name__ == '__main__':
             axis="x",
             index=-1,
             cmap="gray",
+            interpolation="nearest"
         )
     )
     # scene.add_slice(
@@ -1085,14 +1094,16 @@ if __name__ == '__main__':
         em.get_slice(
             axis="y", 
             index=-1,
-            cmap="gray"
+            cmap="gray",
+            interpolation="nearest"
         )
     )
     scene.add_slice(
         em.get_slice(
             axis="z", 
             index=0,
-            cmap="gray"
+            cmap="gray",
+            interpolation="nearest"
         )
     )
     # scene.add_slice(
@@ -1141,7 +1152,8 @@ if __name__ == '__main__':
         light_placement="top-left",
         light_angle=10,
         em_slice_emission_strength=0.02,
-        light_temperature=4000
+        light_temperature=4000,
+        upright_scene=True
     )
     renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
     # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

@@ -219,6 +219,7 @@ class PyVistaRenderer:
             opacity=em_slice.opacity,
             show_scalar_bar=False,
             lighting=False,
+            interpolate_before_map=(em_slice.interpolation == "linear"),
         )
 
     def _load_scene(self, scene):

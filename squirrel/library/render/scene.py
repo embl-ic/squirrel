@@ -835,32 +835,32 @@ class Scene:
             "z_front": {
                 "direction": (0, 0, -1),
                 "view_up": (0, -1, 0),
-                "flip_horizontal": True,
+                "flip_horizontal": False,
             },
             "z_back": {
                 "direction": (0, 0, 1),
                 "view_up": (0, -1, 0),
-                "flip_horizontal": True,
+                "flip_horizontal": False,
             },
             "y_front": {
                 "direction": (0, -1, 0),
                 "view_up": (0, 0, -1),
-                "flip_horizontal": True,
+                "flip_horizontal": False,
             },
             "y_back": {
                 "direction": (0, 1, 0),
                 "view_up": (0, 0, -1),
-                "flip_horizontal": True,
+                "flip_horizontal": False,
             },
             "x_front": {
                 "direction": (-1, 0, 0),
                 "view_up": (0, -1, 0),
-                "flip_horizontal": True,
+                "flip_horizontal": False,
             },
             "x_back": {
                 "direction": (1, 0, 0),
                 "view_up": (0, -1, 0),
-                "flip_horizontal": True,
+                "flip_horizontal": False,
             },
         }
 
@@ -1031,7 +1031,7 @@ if __name__ == '__main__':
         "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8_crystals.h5",
         "r",
     ) as f:
-        seg = f["data"][:, :700, :700]
+        seg = f["data"][:, :740, -840:]
 
     print(seg.shape)
 
@@ -1039,7 +1039,7 @@ if __name__ == '__main__':
         "/media/julian/Data/projects/hennies/amst2-publication/segment_crystals/02_pre_alignment_p456_z76_180_uint8.h5",
         "r",
     ) as f:
-        em_data = f["data"][:, :700, :700]
+        em_data = f["data"][:, :740, -840:]
 
     # ------------------------------------------------------------------
     # Create objects and scene
@@ -1075,21 +1075,44 @@ if __name__ == '__main__':
         voxel_size=(50, 5, 5),
     )
 
+    # # ---
+    # # Slices for x_front
+    # scene.add_slice(
+    #     em.get_slice(
+    #         axis="x",
+    #         index=-1,
+    #         cmap="gray",
+    #         interpolation="nearest"
+    #     )
+    # )
+
+    # scene.add_slice(
+    #     em.get_slice(
+    #         axis="y", 
+    #         index=-1,
+    #         cmap="gray",
+    #         interpolation="nearest"
+    #     )
+    # )
+    # scene.add_slice(
+    #     em.get_slice(
+    #         axis="z", 
+    #         index=0,
+    #         cmap="gray",
+    #         interpolation="nearest"
+    #     )
+    # )
+    # ---
+    # Slices for x_back
     scene.add_slice(
         em.get_slice(
             axis="x",
-            index=-1,
+            index=0,
             cmap="gray",
             interpolation="nearest"
         )
     )
-    # scene.add_slice(
-    #     em.get_slice(
-    #         axis="y", 
-    #         index=0,
-    #         cmap="gray"
-    #     )
-    # )
+
     scene.add_slice(
         em.get_slice(
             axis="y", 
@@ -1106,20 +1129,14 @@ if __name__ == '__main__':
             interpolation="nearest"
         )
     )
-    # scene.add_slice(
-    #     em.get_slice(
-    #         axis="z", 
-    #         index=-1,
-    #         cmap="gray"
-    #     )
-    # )
+    # ---
 
     scene.set_background("white")
     scene.set_anti_aliasing()
 
-    scene.set_camera_preset('x_front')
-    scene.move_camera('z', 20)
-    scene.move_camera('y', 7)
+    scene.set_camera_preset('x_back')
+    scene.move_camera('z', -20)
+    scene.move_camera('y', -7)
 
     # scene.set_camera([
     #     (2900, 12800, 1300),

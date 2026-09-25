@@ -1137,7 +1137,9 @@ if __name__ == '__main__':
         light_angle=10,
         em_slice_emission_strength=0.02,
         light_temperature=4000,
-        upright_scene=True
+        upright_scene=True,
+        view_transform="Standard",
+        look="Medium High Contrast",
     )
     renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
     # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

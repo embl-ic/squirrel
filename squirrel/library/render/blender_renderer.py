@@ -23,7 +23,8 @@ class BlenderRenderer(Renderer):
         output_size=(1200,1200),
         samples=128,
         world_scale=1e-3,
-        color_look="AgX - High Contrast",
+        view_transform="Standard",
+        look="None",
         exposure=1.5,
         gamma=0.8,
         light_placement="top-right",
@@ -40,7 +41,8 @@ class BlenderRenderer(Renderer):
         self.samples = samples
         self.world_scale = world_scale
 
-        self.color_look = color_look
+        self.view_transform = view_transform
+        self.look = look
         self.exposure = exposure
         self.gamma = gamma
 
@@ -77,7 +79,8 @@ class BlenderRenderer(Renderer):
         filename,
     ):
 
-        filename = Path(filename)
+        filename = Path(filename).expanduser().resolve()
+        filename.parent.mkdir(parents=True, exist_ok=True)
         blend_file = filename.with_suffix(".blend")
 
         self.write_blend(
@@ -95,6 +98,10 @@ class BlenderRenderer(Renderer):
         blend_file,
         output_file,
     ):
+
+        blend_file = Path(blend_file).expanduser().resolve()
+        output_file = Path(output_file).expanduser().resolve()
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory() as tmp:
 
@@ -397,7 +404,8 @@ class BlenderRenderer(Renderer):
             "background": scene.background,
 
             "render_settings": {
-                "color_look": self.color_look,
+                "view_transform": self.view_transform,
+                "look": self.look,
                 "exposure": self.exposure,
                 "gamma": self.gamma,
                 "world_strength": self.world_strength,
@@ -1088,7 +1096,8 @@ scene.render.engine = "CYCLES"
 
 # Store the intended color-management settings in the .blend itself so the
 # interactive Blender project matches the final scripted render.
-scene.view_settings.look = settings["color_look"]
+scene.view_settings.view_transform = settings["view_transform"]
+scene.view_settings.look = settings["look"]
 scene.view_settings.exposure = settings["exposure"]
 scene.view_settings.gamma = settings["gamma"]
 
@@ -1200,6 +1209,9 @@ bpy.ops.render.render(
         The resulting file can be opened interactively in Blender
         for lighting, material, camera, and render adjustments.
         """
+
+        filename = Path(filename).expanduser().resolve()
+        filename.parent.mkdir(parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory() as tmp:
 

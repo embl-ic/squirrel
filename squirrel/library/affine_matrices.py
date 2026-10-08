@@ -195,14 +195,26 @@ class AffineStack:
         if self.sequenced:
             return self.copy()
 
-        stack = AffineStack(sequenced=True, metadata=self.metadata)
-        current = AffineMatrix.identity(ndim=self.ndim, pivot=self.pivot, dtype=self.dtype)
+        # Pairwise prefix accumulation limits multiplication-chain depth to
+        # O(log n), rather than O(n) for a left-to-right running product.
+        # This restores the precision-preserving sequencing of squirrel 0.4.x.
+        groups = [[matrix.copy()] for matrix in self]
+        while len(groups) > 1:
+            merged = []
+            for idx in range(0, len(groups), 2):
+                left = groups[idx]
+                if idx + 1 == len(groups):
+                    merged.append(left)
+                    continue
+                right = groups[idx + 1]
+                merged.append(left + [left[-1] @ matrix for matrix in right])
+            groups = merged
 
-        for matrix in self:
-            current = current @ matrix
-            stack.append(current)
-
-        return stack
+        return AffineStack(
+            matrices=groups[0] if groups else [],
+            sequenced=True,
+            metadata=self.metadata,
+        )
 
     def to_relative(self):
         """

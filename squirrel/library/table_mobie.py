@@ -23,11 +23,14 @@ def normalize_mobie_table_entry_dict(entries, entry_count=None, use_abs_path=Fal
 
     def _normalize_uri(uri):
         if use_abs_path:
-            uri = os.path.abspath(uri)
-        else:
-            assert table_filepath is not None
-            uri = os.path.relpath(uri, os.path.split(table_filepath)[0])
-        return uri
+            return os.path.abspath(uri)
+
+        assert table_filepath is not None
+
+        table_dir = os.path.dirname(os.path.abspath(table_filepath))
+        uri = os.path.abspath(uri)
+
+        return os.path.relpath(uri, table_dir)
 
     def _normalize_affine(affine):
         return ','.join([str(x) for x in affine])
@@ -38,6 +41,8 @@ def normalize_mobie_table_entry_dict(entries, entry_count=None, use_abs_path=Fal
         return exclusive
 
     def _normalize_contrast_limits(contrast_limits):
+        if contrast_limits == 'auto':
+            return contrast_limits
         return ','.join(f'{x:.1f}' if isinstance(x, int) or x == int(x) else str(x) for x in contrast_limits)
 
     # Let's make sure everything is a list!
@@ -126,15 +131,20 @@ def replace_mobie_table(table_filepath, entries):
     table_data.to_csv(table_filepath, index=False, sep='\t')
 
 
-def update_mobie_table_entry(table_filepath, entry, item):
-    assert len(entry) == 2, 'entry should be a list with two items: a column header and a value'
-    assert len(item) == 2, 'item should be a list with two items: a column header and a value to look for'
+def update_mobie_table_entry(table_filepath, entry, item, allow_multiple=False):
+    assert len(entry) == 2
+    assert len(item) == 2
 
     import pandas as pd
     mobie_table = pd.read_csv(table_filepath, sep='\t')
 
-    row_index = mobie_table[mobie_table[item[0]] == item[1]].index[0]
-    mobie_table.at[row_index, entry[0]] = entry[1]
+    matches = mobie_table[mobie_table[item[0]] == item[1]].index
+
+    if not allow_multiple:
+        assert len(matches) == 1, "Multiple matches found, set allow_multiple=True"
+        mobie_table.at[matches[0], entry[0]] = entry[1]
+    else:
+        mobie_table.loc[matches, entry[0]] = entry[1]
 
     mobie_table.to_csv(table_filepath, index=False, sep='\t')
 

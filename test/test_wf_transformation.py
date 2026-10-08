@@ -864,6 +864,7 @@ class TestApplyAffinesWorkflow(unittest.TestCase):
 class TestApplyAutoPadWorkflow(unittest.TestCase):
 
     def test_writes_padded_stack_and_shape(self):
+        print('Testing workflow: apply auto padding and save padded transforms ...')
         from squirrel.library.affine_matrices import AffineStack
         from squirrel.workflows.transformation import apply_auto_pad_workflow
 

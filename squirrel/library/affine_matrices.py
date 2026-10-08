@@ -768,6 +768,7 @@ class AffineStack:
         data = {
             "transforms": self.as_array(homogeneous=False, flatten=True).tolist(),
             "sequenced": self.sequenced,
+            "pivot": None if self.pivot is None else self.pivot.tolist(),
             "metadata": _jsonify(self.metadata),
         }
 
@@ -791,6 +792,7 @@ class AffineStack:
 
         return cls.from_array(
             transforms,
+            pivot=data.get("pivot"),
             sequenced=data.get("sequenced", False),
             metadata=data.get("metadata", {}),
         )

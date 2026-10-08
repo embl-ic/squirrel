@@ -619,6 +619,60 @@ class TestAffineStack(unittest.TestCase):
         for a, b in zip(stack, loaded):
             self.assertEqual(a, b)
 
+    def test_write_read_preserves_nonzero_pivot(self):
+        print('Testing AffineStack: nonzero pivot survives JSON round-trip ...')
+
+        import json
+        import tempfile
+        from pathlib import Path
+
+        angle = np.pi / 4
+        c, s = np.cos(angle), np.sin(angle)
+        transforms = np.array([
+            [[c, -s, 3.0], [s, c, -2.0]],
+            [[1.0, 0.0, 4.0], [0.0, 1.0, 5.0]],
+        ])
+        stack = AffineStack.from_array(
+            transforms, pivot=[12.0, 23.0], sequenced=True,
+            metadata={"bounds": [[0, 10, 0, 10]]},
+        )
+        points = np.array([[1.0, 2.0], [9.0, 8.0]])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / 'pivot.json'
+            stack.write(filepath)
+            with filepath.open(encoding='utf-8') as f:
+                payload = json.load(f)
+            loaded = AffineStack.read(filepath)
+
+        self.assertEqual(payload['pivot'], [12.0, 23.0])
+        np.testing.assert_allclose(loaded.pivot, stack.pivot)
+        self.assertEqual(loaded.sequenced, stack.sequenced)
+        self.assertEqual(loaded.metadata, stack.metadata)
+        for original, restored in zip(stack, loaded):
+            np.testing.assert_allclose(restored.apply(points), original.apply(points))
+
+    def test_read_without_pivot_defaults_to_zero(self):
+        print('Testing AffineStack: read JSON without pivot field ...')
+
+        import json
+        import tempfile
+        from pathlib import Path
+
+        payload = {
+            "transforms": [[1, 0, 3, 0, 1, 4]],
+            "sequenced": False,
+            "metadata": {"source": "older-format"},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / 'no_pivot.json'
+            filepath.write_text(json.dumps(payload), encoding='utf-8')
+            loaded = AffineStack.read(filepath)
+
+        np.testing.assert_allclose(loaded.pivot, [0.0, 0.0])
+        self.assertEqual(loaded.metadata, payload['metadata'])
+        np.testing.assert_allclose(loaded[0].apply([[0, 0]]), [[3, 4]])
+
     def test_write_read_empty(self):
         print('Testing AffineStack: write/read empty stack ...')
 

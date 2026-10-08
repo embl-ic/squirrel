@@ -859,3 +859,35 @@ class TestApplyAffinesWorkflow(unittest.TestCase):
                 atol=1e-12,
             )
         )
+
+
+class TestApplyAutoPadWorkflow(unittest.TestCase):
+
+    def test_writes_padded_stack_and_shape(self):
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import apply_auto_pad_workflow
+
+        bounds = [[0, 0, 10, 12], [0, 0, 10, 12]]
+        transforms = AffineStack.identity(
+            length=2, ndim=2, sequenced=True, metadata={"bounds": bounds}
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "input.json"
+            output_path = Path(directory) / "output.json"
+            transforms.write(input_path)
+
+            expected, expected_shape = transforms.auto_pad(bounds, extra_padding=16)
+            apply_auto_pad_workflow(str(input_path), str(output_path))
+            actual = AffineStack.read(output_path)
+
+            self.assertTrue(actual.sequenced)
+            self.assertEqual(actual.get_metadata("stack_shape"), expected_shape)
+            self.assertEqual(actual.get_metadata("bounds"), bounds)
+            for result, reference in zip(actual, expected):
+                np.testing.assert_allclose(
+                    result.as_homogeneous(), reference.as_homogeneous(), atol=1e-12
+                )
+            self.assertFalse(np.allclose(
+                actual[0].as_homogeneous(), transforms[0].as_homogeneous()
+            ))

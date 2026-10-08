@@ -13,11 +13,9 @@ setup(
     packages=find_packages(),
     entry_points={  # Naming scheme: sq-<namespace>-<func-name>, e.g. sq-stack-tif_nearest_scaling
         'console_scripts': [
-            'apply_affine_on_volume = squirrel.transformation:affine_on_volume',
             'apply_rotation_and_scale = squirrel.transformation:apply_rotation_and_scale',
             'apply_z_chunks_to_volume = squirrel.transformation:apply_z_chunks_to_volume',
             'average_affine_on_volume = squirrel.transformation:average_affine_on_volume',
-            'sequential_affine_on_volume = squirrel.transformation:sequential_affine_on_volume',
             'decompose_affine_matrix = squirrel.transformation:decompose_affine_matrix',
             'elastix_on_volume3d = squirrel.elastix_registration:elastix_on_volume3d',
             'elastix_slices_to_volume = squirrel.elastix_registration:elastix_slices_to_volume',
@@ -42,6 +40,7 @@ setup(
             'sq-elastix-make_default_parameter_file = squirrel.elastix_registration:make_elastix_default_parameter_file',
             'sq-elastix-apply_multi_step_stack_alignment = squirrel.elastix_registration:apply_multi_step_stack_alignment',
             'sq-elastix-get_elastix_transforms_substack = squirrel.elastix_registration:get_elastix_transforms_substack',
+            'sq-hydra-get_acquisition_transforms = squirrel.hydra:get_acquisition_transforms',
             'sq-image-filter_2d_workflow = squirrel.image_operations:filter_2d',
             'sq-linalg-dot_product_on_affines = squirrel.linear_algebra:dot_product_on_affines',
             'sq-linalg-scale_sequential_affines = squirrel.linear_algebra:scale_sequential_affines',
@@ -69,12 +68,13 @@ setup(
             'sq-stack-compress_tif_stack = squirrel.stack_operations:compress_tif_stack',
             'sq-stack-crop_from_stack = squirrel.stack_operations:crop_from_stack',
             'sq-stack-calculator = squirrel.stack_operations:stack_calculator',
-            # 'sq-stack-clahe_on_stack = squirrel.stack_operations:clahe_on_stack',
             'sq-stack-estimate_crop_xy = squirrel.stack_operations:estimate_crop_xy',
             'sq-stack-filter_2d_workflow = squirrel.stack_operations:filter_2d',
             'sq-stack-merge_tif_stacks = squirrel.stack_operations:merge_tif_stacks',
             'sq-stack-to_consistent_shapes = squirrel.stack_operations:stack_to_consistent_shapes',
             'sq-transform-apply_stack_alignment = squirrel.transformation:apply_stack_alignment',
+            'sq-transform-apply_affine = squirrel.transformation:apply_affine',
+            'sq-transform-apply_affines = squirrel.transformation:apply_affines',
             'sq-transform-apply_auto_pad = squirrel.transformation:apply_auto_pad',
             'sq-transform-get_affine_transforms_substack = squirrel.transformation:get_affine_transforms_substack'
         ]

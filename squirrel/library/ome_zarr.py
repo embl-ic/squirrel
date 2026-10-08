@@ -788,5 +788,6 @@ if __name__ == '__main__':
     )
 
     # --- Finalizing the ome-zarr (after all writing is completed) ---
+    oz = OMEZarrStore(fp, mode='a')
     oz.rebuild_pyramid(n_threads=os.cpu_count())
 

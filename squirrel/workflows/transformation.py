@@ -3,217 +3,191 @@ import os.path
 import numpy as np
 
 
-def decompose_affine(
-        transform,
-        out_folder=None,
-        shear_to_translation_pivot=None,
-        pivot=None,
-        verbose=False
+def decompose_affine_workflow(
+    transform,
+    out_folder=None,
+    shear_to_translation_pivot=None,
+    pivot=None,
+    verbose=False,
 ):
-    # from ..library.transformation import (
-    #     load_transform_matrix,
-    #     extract_approximate_rotation_affine,
-    #     decompose_3d_transform,
-    #     validate_and_reshape_matrix
-    # )
-    # from ..library.elastix import save_transforms
+    """
+    Decompose an affine transformation into translation, rotation,
+    scale, and shear components.
 
-    # if type(transform) == str:
-    #     transform = load_transform_matrix(transform)
-    #
-    # if verbose:
-    #     print(f'transform = {transform}')
+    Parameters
+    ----------
+    transform
+        AffineMatrix, affine array, or path to an AffineMatrix file.
 
-    # transform = validate_and_reshape_matrix(transform, 3)
+    out_folder
+        Optional output directory for the decomposition components.
+
+    shear_to_translation_pivot
+        Optional coordinate at which positional effects are transferred
+        into the translation component.
+
+    pivot
+        Optional pivot assigned to the input transformation.
+
+    verbose
+        Print the input and decomposed matrices.
+
+    Returns
+    -------
+    translation, rotation, scale, shear
+        Four AffineMatrix instances.
+    """
+    from os import PathLike
+    from pathlib import Path
 
     from ..library.affine_matrices import AffineMatrix
-    if type(transform) == str:
-        transform = AffineMatrix(filepath=transform)
+
+    if isinstance(transform, AffineMatrix):
+        transform = transform.copy()
+        if pivot is not None:
+            transform = transform.with_pivot(pivot)
+
+    elif isinstance(transform, (str, PathLike)):
+        transform = AffineMatrix.read(transform)
+        if pivot is not None:
+            transform = transform.with_pivot(pivot)
+
     else:
-        transform = AffineMatrix(parameters=transform)
+        transform = AffineMatrix.from_array(
+            transform,
+            pivot=pivot,
+        )
 
     if verbose:
-        print(f'transform.get_matrix() = {transform.get_matrix()}')
+        print(f"transform =\n{transform.as_homogeneous()}")
 
-    if shear_to_translation_pivot is not None:
-        tpivot = AffineMatrix(np.array(
-            [
-                [1, 0, 0, shear_to_translation_pivot[0]],
-                [0, 1, 0, shear_to_translation_pivot[1]],
-                [0, 0, 1, shear_to_translation_pivot[2]]
-            ]
-        ).flatten())
-        tpivot_ = AffineMatrix(np.array(
-            [
-                [1, 0, 0, -shear_to_translation_pivot[0]],
-                [0, 1, 0, -shear_to_translation_pivot[1]],
-                [0, 0, 1, -shear_to_translation_pivot[2]]
-            ]
-        ).flatten())
-        transform = transform.dot(tpivot)
-    if verbose:
-        print(f'transform = {transform}')
-    decomposition = transform.decompose()
-    # decomposition = decompose_3d_transform(transform, verbose=verbose)
-    if verbose:
-        print(f'decomposition = {decomposition}')
-
-    # if shear_to_translation_pivot is not None:
-    #     import math
-    #     shear = decomposition[3]
-    #     translation = decomposition[0]
-    #     translation[0] += shear_to_translation_pivot[0] * math.atan(shear[0])
-    #     translation[1] += shear_to_translation_pivot[1] * math.atan(shear[1])
-    #     translation[2] += shear_to_translation_pivot[2] * math.atan(shear[2])
-
-    # from ..library.transformation import (
-    #     setup_translation_matrix,
-    #     setup_scale_matrix,
-    #     setup_shear_matrix
-    # )
-    #
-    # translation = decomposition[0]
-    # translation = setup_translation_matrix(translation)
-    # if shear_to_translation_pivot is not None:
-    #     translation = np.dot(translation, tpivot_)
-    # scale = decomposition[2]
-    # scale = setup_scale_matrix(scale)
-    # rotation = np.concatenate([decomposition[1], np.swapaxes([[0., 0., 0.]], 0, 1)], axis=1)
-    # shear = decomposition[3]
-    # shear = setup_shear_matrix(shear)
-
-    translation, rotation, scale, shear = decomposition
-    if shear_to_translation_pivot:
-        translation = translation.dot(tpivot_)
+    decomposition = transform.decompose_at_pivot(shear_to_translation_pivot)
 
     if verbose:
-        print(f'translation = {translation.get_matrix()}')
-        print(f'rotation = {rotation.get_matrix()}')
-        print(f'scale = {scale.get_matrix()}')
-        print(f'shear = {shear.get_matrix()}')
+        for name, component in zip(("translation", "rotation", "scale", "shear"), decomposition):
+            print(f"{name} =\n{component.as_homogeneous()}")
 
     if out_folder is not None:
-        import os
-        translation.to_file(os.path.join(out_folder, 'translation.json'))
-        rotation.to_file(os.path.join(out_folder, 'rotation.json'))
-        scale.to_file(os.path.join(out_folder, 'scale.json'))
-        shear.to_file(os.path.join(out_folder, 'shear.json'))
-        # save_transforms(translation, os.path.join(out_folder, 'translation.json'), param_order='M', save_order='C', ndim=3, verbose=verbose)
-        # save_transforms(rotation, os.path.join(out_folder, 'rotation.json'), param_order='M', save_order='C', ndim=3, verbose=verbose)
-        # save_transforms(scale, os.path.join(out_folder, 'scale.json'), param_order='M', save_order='C', ndim=3, verbose=verbose)
-        # save_transforms(shear, os.path.join(out_folder, 'shear.json'), param_order='M', save_order='C', ndim=3, verbose=verbose)
+        out_folder = Path(out_folder)
+        out_folder.mkdir(parents=True, exist_ok=True)
+
+        for name, component in zip(("translation", "rotation", "scale", "shear"), decomposition):
+            component.write(out_folder / f"{name}.json")
+
     return decomposition
 
 
-def apply_affine(
+def apply_affine_workflow(
         image,
         transform,
         out_filepath=None,
         image_key='data',
+        pivot=None,
         no_offset_to_center=False,
-        # pivot=None,
-        apply='all',  # Can be ['all' | 'rotation']
+        apply='all',
         scale_canvas=False,
-        verbose=False
+        verbose=False,
 ):
 
+    from os import PathLike
+
+    from ..library.affine_matrices import AffineMatrix
+    from ..library.io import load_data_handle, write_h5_container
+    from ..library.transformation import apply_affine_transform
+
+    if isinstance(image, (str, PathLike)):
+        image, _ = load_data_handle(image, key=image_key)[:]
+    else:
+        image = np.asarray(image)
+
+    if isinstance(transform, AffineMatrix):
+        transform = transform.copy()
+    elif isinstance(transform, (str, PathLike)):
+        transform = AffineMatrix.read(transform)
+    else:
+        transform = AffineMatrix.from_array(transform)
+
+    if pivot is not None:
+        transform = transform.with_pivot(pivot)
+
     if verbose:
-        print(f'image = {image if type(image) == str else image.shape}')
+        print(f'image.shape = {image.shape}')
         print(f'transform = {transform}')
         print(f'out_filepath = {out_filepath}')
         print(f'image_key = {image_key}')
-
-    from ..library.transformation import apply_affine_transform
-    # from ..library.io import load_data, write_h5_container
-    from ..library.io import load_data_handle, write_h5_container
-
-    if type(image) == str:
-        # image = load_data(image, key=image_key)
-        image, _ = load_data_handle(image, key=image_key)[:]
-
-    if type(transform) == str:
-        # from ..library.transformation import load_transform_matrix
-        from ..library.affine_matrices import AffineMatrix
-        # transform = load_transform_matrix(transform)
-        transform = AffineMatrix(filepath=transform)
+        print(f'pivot = {pivot}')
 
     result = apply_affine_transform(
         image,
         transform,
+        pivot=pivot,
         no_offset_to_center=no_offset_to_center,
-        # pivot=pivot,
         apply=apply,
         scale_canvas=scale_canvas,
-        verbose=verbose
+        verbose=verbose,
     )
 
-    write_h5_container(out_filepath, result, key='data')
+    if out_filepath is not None:
+        write_h5_container(out_filepath, result, key='data')
 
     return result
 
 
-def apply_sequential_affine(
+def apply_affines_workflow(
         image,
         transforms,
         out_filepath=None,
         image_key='data',
         no_offset_to_center=False,
         pivot=None,
-        verbose=False
+        verbose=False,
 ):
+    """
+    Compose multiple affine transforms and apply the result to an image.
+
+    Parameters
+    ----------
+    transforms
+        Iterable containing AffineMatrix instances, affine arrays, or paths
+        to stored AffineMatrix files.
+    """
+    from os import PathLike
+    from pathlib import Path
 
     from ..library.affine_matrices import AffineMatrix
 
-    transform = None
-    for t in transforms:
-        if transform is None:
-            transform = AffineMatrix(filepath=t)
-        else:
-            transform = transform.dot(AffineMatrix(filepath=t))
+    transforms = list(transforms)
 
-    transform.set_pivot(pivot)
+    if len(transforms) == 0:
+        raise ValueError("transforms must contain at least one affine transformation.")
 
-    transform.to_file(
-        os.path.join(
-            os.path.split(out_filepath)[0],
-            os.path.splitext(os.path.split(out_filepath)[1])[0] + '.json'
-        )
-    )
+    def normalize_transform(transform):
+        if isinstance(transform, AffineMatrix):
+            return transform.copy()
+        if isinstance(transform, (str, PathLike)):
+            return AffineMatrix.read(transform)
+        return AffineMatrix.from_array(transform)
 
-    # from ..library.transformation import load_transform_matrix, validate_and_reshape_matrix
-    # if len(transforms) == 1:
-    #     transforms = load_transform_matrix(transforms[0])
-    #     transform = validate_and_reshape_matrix(transforms[0], 3)
-    #     for t in transforms[1:]:
-    #         transform = np.dot(transform, validate_and_reshape_matrix(t, 3))
-    #
-    # else:
-    #     transform = validate_and_reshape_matrix(load_transform_matrix(transforms[0]), 3)
-    #     for t in transforms[1:]:
-    #         t = validate_and_reshape_matrix(load_transform_matrix(t), 3)
-    #         transform = np.dot(transform, t)
-    #
-    # from ..library.elastix import save_transforms
-    # import os
-    # save_transforms(
-    #     transform[:3, :],
-    #     os.path.join(
-    #         os.path.split(out_filepath)[0],
-    #         os.path.splitext(os.path.split(out_filepath)[1])[0] + '.json'
-    #     ),
-    #     param_order='M',
-    #     save_order='C',
-    #     ndim=3,
-    #     verbose=verbose
-    # )
+    transform = normalize_transform(transforms[0])
 
-    apply_affine(
+    for next_transform in transforms[1:]:
+        transform = transform @ normalize_transform(next_transform)
+
+    if pivot is not None:
+        transform = transform.with_pivot(pivot)
+
+    if out_filepath is not None:
+        transform_filepath = Path(out_filepath).with_suffix(".json")
+        transform.write(transform_filepath)
+
+    return apply_affine_workflow(
         image,
         transform,
         out_filepath=out_filepath,
         image_key=image_key,
+        pivot=pivot,
         no_offset_to_center=no_offset_to_center,
-        verbose=verbose
+        verbose=verbose,
     )
 
 
@@ -589,24 +563,25 @@ def dot_product_on_affines_workflow(
     from ..library.affine_matrices import AffineStack
 
     transforms = [
-        AffineStack(filepath=transform_filepaths[0]),
-        AffineStack(filepath=transform_filepaths[1])
+        AffineStack.read(transform_filepaths[0]),
+        AffineStack.read(transform_filepaths[1])
     ]
-    if transforms[0].is_sequenced or transforms[1].is_sequenced:
-        if not transforms[0].is_sequenced:
-            transforms[0] = transforms[0].get_sequenced_stack()
-        if not transforms[1].is_sequenced:
-            transforms[1] = transforms[1].get_sequenced_stack()
+
+    if transforms[0].sequenced or transforms[1].sequenced:
+        if not transforms[0].sequenced:
+            transforms[0] = transforms[0].to_sequenced()
+        if not transforms[1].sequenced:
+            transforms[1] = transforms[1].to_sequenced()
 
     if inverse[0]:
-        transforms[0] = -transforms[0]
+        transforms[0] = transforms[0].inverse()
     if inverse[1]:
-        transforms[1] = -transforms[1]
-    out_transforms = transforms[0] * transforms[1]
+        transforms[1] = transforms[1].inverse()
+    out_transforms = transforms[0] @ transforms[1]
     if keep_meta is not None:
-        out_transforms.set_meta(data=transforms[keep_meta].get_meta())
+        out_transforms.set_metadata(data=transforms[keep_meta].get_metadata())
 
-    out_transforms.to_file(out_filepath)
+    out_transforms.write(out_filepath)
 
 
 def scale_sequential_affines_workflow(
@@ -826,26 +801,22 @@ def apply_auto_pad_workflow(
         print(f'transform_filepath = {transform_filepath}')
         print(f'out_filepath = {out_filepath}')
 
-    from squirrel.library.image import apply_auto_pad
     from squirrel.library.affine_matrices import AffineStack
 
-    transforms = AffineStack(filepath=transform_filepath)
-    if not transforms.is_sequenced:
-        transforms = transforms.get_sequenced_stack()
-    if not transforms.exists_meta('bounds'):
-        from squirrel.library.image import get_bounds_of_stack, apply_auto_pad
+    transforms = AffineStack.read(transform_filepath)
+    if not transforms.sequenced:
+        transforms = transforms.to_sequenced()
+    if not transforms.has_metadata('bounds'):
+        from squirrel.library.image import get_bounds_of_stack 
         from squirrel.library.io import load_data_handle
         assert image_stack_path is not None, 'A stack needs to be supplied if no bounds information is found in the transformation meta data'
         stack_h, stack_shape = load_data_handle(image_stack_path, key=key, pattern=pattern)
         stack_bounds = get_bounds_of_stack(stack_h, stack_shape, return_ints=True, z_range=None)
     else:
-        stack_bounds = transforms.get_meta('bounds')
+        stack_bounds = transforms.get_metadata('bounds')
 
-    transforms, stack_shape = apply_auto_pad(
-        transforms, [len(transforms), 0, 0], stack_bounds, extra_padding=16
-    )
-    transforms.set_meta('stack_shape', stack_shape)
-    transforms.to_file(out_filepath)
+    transforms.auto_pad(stack_bounds, extra_padding=16)
+    transforms.write(out_filepath)
 
 
 def crop_transform_sequence_workflow(transform_filepath, out_filepath, z_range, verbose=False):

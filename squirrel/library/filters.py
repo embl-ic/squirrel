@@ -60,6 +60,8 @@ def filter_wrapper(func):
                 clip: tuple[float, float] | None = None,
                 cast_dtype: np.dtype | None = None,
                 keep_zeros: bool = False,
+                zeros_to_mean: bool = False,
+                normalization_range: tuple[float, float] | None = None,
                 **kwargs) -> np.ndarray:
 
         if filter_mode not in ['apply', 'add', 'subtract']:
@@ -70,7 +72,21 @@ def filter_wrapper(func):
         cast_dtype = np.dtype(cast_dtype) if cast_dtype is not None else None
 
         original = in_array
-        result = func(in_array, *args, **kwargs)
+
+        # Replace zeros with the mean of all non-zero pixels before filtering
+        if zeros_to_mean:
+            nonzero = in_array != 0
+
+            if np.any(nonzero):
+                mean = np.mean(in_array[nonzero])
+                filter_input = np.where(nonzero, in_array, mean)
+            else:
+                # No non-zero pixels from which to calculate a mean
+                filter_input = in_array
+        else:
+            filter_input = in_array
+
+        result = func(filter_input, *args, **kwargs)
 
         if filter_mode == 'add':
             result = original.astype('float32') + result.astype('float32')
@@ -81,8 +97,15 @@ def filter_wrapper(func):
             result = np.clip(result, *clip)
 
         if np.issubdtype(cast_dtype, np.unsignedinteger):
-            result -= result.min()
-            result = result / result.max() * np.iinfo(cast_dtype).max
+            if normalization_range is None:
+                low = result.min()
+                high = result.max()
+            else:
+                low, high = normalization_range
+
+            result = np.clip(result, low, high)
+            result = (result - low) / (high - low)
+            result *= np.iinfo(cast_dtype).max
             result = result.astype(cast_dtype)
         elif cast_dtype is not None:
             result = result.astype(cast_dtype)

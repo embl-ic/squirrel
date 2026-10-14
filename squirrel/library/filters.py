@@ -1,7 +1,8 @@
 """Image filtering and JSON-compatible filter pipelines."""
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial, wraps
-from multiprocessing import Pool
+from multiprocessing import Pool, get_context
 
 import numpy as np
 
@@ -356,7 +357,8 @@ class ImageFilter:
                 intermediates.append(result.copy())
         return (result, intermediates) if return_intermediates else result
 
-    def get_filtered_stack(self, filters: list | tuple, n_workers: int = 1) -> np.ndarray:
+    def get_filtered_stack(self, filters: list | tuple, n_workers: int = 1,
+                           backend: str = 'threading') -> np.ndarray:
         """Apply the same pipeline independently to each stack slice.
 
         Parameters
@@ -364,7 +366,10 @@ class ImageFilter:
         filters : list or tuple
             Pipeline of ``[filter_name, parameter_dict]`` steps.
         n_workers : int, optional
-            Positive number of worker processes. One runs serially.
+            Positive number of workers. One runs serially.
+        backend : str, optional
+            ``"threading"`` (default), ``"multiprocessing"``, or ``"serial"``.
+            The serial backend requires ``n_workers=1``.
 
         Returns
         -------
@@ -375,11 +380,19 @@ class ImageFilter:
         ------
         TypeError, ValueError
             If the pipeline is invalid, the input is not a nonempty 3D or
-            4D stack, or ``n_workers`` is not a positive integer.
+            4D stack, ``n_workers`` is not a positive integer, or the
+            execution backend is invalid.
         """
         steps = self.validate_pipeline(filters)
         if isinstance(n_workers, (bool, np.bool_)) or not isinstance(n_workers, (int, np.integer)) or n_workers < 1:
             raise ValueError(f'n_workers must be a positive integer, got {n_workers!r}')
+        if not isinstance(backend, str):
+            raise TypeError(f'backend must be a string, got {backend!r}')
+        if backend not in ('serial', 'multiprocessing', 'threading'):
+            raise ValueError(f'Unknown filtering backend {backend!r}; expected '
+                             "'serial', 'multiprocessing', or 'threading'")
+        if backend == 'serial' and n_workers != 1:
+            raise ValueError('backend="serial" requires n_workers=1')
         stack = np.asarray(self._in_array)
         if stack.ndim not in (3, 4):
             raise ValueError(f'Stack processing requires 3D or 4D input, got {stack.ndim}D')
@@ -390,6 +403,17 @@ class ImageFilter:
         # imap consumes stack slices lazily instead of materializing a list of
         # (slice, pipeline) tasks. It also preserves the original slice order.
         worker = partial(_filter_slice, filters=steps)
+        if backend == 'threading':
+            with ThreadPoolExecutor(max_workers=int(n_workers)) as executor:
+                return np.asarray(list(executor.map(worker, stack)))
+        # CLAHE uses OpenCV, whose native thread state can be unsafe to
+        # inherit with fork after CLAHE has run in the parent process.
+        # Spawn fresh workers for this pipeline and disable nested OpenCV
+        # parallelism inside each worker; do not alter parent thread settings.
+        if any(name == 'clahe' for name, _ in steps):
+            with get_context('spawn').Pool(
+                    processes=int(n_workers), initializer=_init_opencv_worker) as pool:
+                return np.asarray(list(pool.imap(worker, stack, chunksize=1)))
         with Pool(processes=int(n_workers)) as pool:
             return np.asarray(list(pool.imap(worker, stack, chunksize=1)))
 
@@ -500,3 +524,9 @@ class ImageFilter:
 
 def _filter_slice(image, filters):
     return ImageFilter(image).get_filtered(filters)
+
+
+def _init_opencv_worker():
+    """Limit OpenCV native threads only within a multiprocessing worker."""
+    import cv2
+    cv2.setNumThreads(1)

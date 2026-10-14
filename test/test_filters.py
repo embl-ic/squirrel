@@ -563,6 +563,107 @@ class TestFilterMultiprocessing(unittest.TestCase):
         np.testing.assert_allclose(parallel, serial, rtol=1e-6, atol=1e-6)
         self.assertEqual(parallel.dtype, serial.dtype)
 
+    def test_execution_backends(self):
+        print('Testing serial, multiprocessing, and threading backend equivalence ...')
+        from squirrel.library.filters import ImageFilter
+
+        rng = np.random.default_rng(123)
+        stack = rng.integers(0, 65535, size=(8, 64, 64), dtype=np.uint16)
+        pipeline = [['fft_highpass', dict(sigma=(5, 5))]]
+        reference = ImageFilter(stack).get_filtered_stack(
+            pipeline, n_workers=1, backend='serial')
+        for backend, workers in (('multiprocessing', 1),
+                                 ('multiprocessing', 2),
+                                 ('threading', 1),
+                                 ('threading', 2),
+                                 ('threading', 4)):
+            with self.subTest(backend=backend, workers=workers):
+                result = ImageFilter(stack).get_filtered_stack(
+                    pipeline, n_workers=workers, backend=backend)
+                np.testing.assert_allclose(result, reference, rtol=1e-6, atol=1e-6)
+                self.assertEqual(result.dtype, reference.dtype)
+                self.assertEqual(result.shape, reference.shape)
+
+    def test_default_backend_uses_threading(self):
+        print('Testing threading is the default parallel stack backend ...')
+        from unittest.mock import patch
+        from squirrel.library.filters import ImageFilter
+
+        stack = np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8)
+        pipeline = [['same', {}]]
+        with patch('squirrel.library.filters.Pool', side_effect=AssertionError(
+                'Default execution unexpectedly created a process pool')):
+            result = ImageFilter(stack).get_filtered_stack(pipeline, n_workers=2)
+        np.testing.assert_array_equal(result, stack)
+
+    def test_mixed_pipeline_backend_equivalence(self):
+        print('Testing mixed filter pipelines across execution backends ...')
+        from squirrel.library.filters import ImageFilter
+
+        rng = np.random.default_rng(230)
+        stack = rng.integers(0, 65535, size=(6, 48, 48), dtype=np.uint16)
+        pipeline = [
+            ['gaussian', {'sigma': 1.5}],
+            ['median', {'radius': 2}],
+            ['fft_highpass', {'sigma': (5, 5)}],
+        ]
+        reference = ImageFilter(stack).get_filtered_stack(
+            pipeline, n_workers=1, backend='serial')
+        for backend in ('threading', 'multiprocessing'):
+            with self.subTest(backend=backend):
+                result = ImageFilter(stack).get_filtered_stack(
+                    pipeline, n_workers=2, backend=backend)
+                np.testing.assert_allclose(result, reference, rtol=1e-6, atol=1e-6)
+                self.assertEqual(result.dtype, reference.dtype)
+                self.assertEqual(result.shape, reference.shape)
+
+    def test_thread_worker_exception_propagation(self):
+        print('Testing thread worker exceptions propagate to the caller ...')
+        from squirrel.library.filters import ImageFilter
+
+        from unittest.mock import patch
+        stack = np.ones((4, 8, 8), dtype=np.uint8)
+
+        def fail_on_slice(image, filters):
+            raise RuntimeError('worker failure sentinel')
+
+        with patch('squirrel.library.filters._filter_slice', side_effect=fail_on_slice):
+            with self.assertRaisesRegex(RuntimeError, 'worker failure sentinel'):
+                ImageFilter(stack).get_filtered_stack(
+                    [['same', {}]], n_workers=2, backend='threading')
+
+    def test_clahe_multiprocessing_after_serial(self):
+        print('Testing CLAHE multiprocessing after serial OpenCV initialization ...')
+        from squirrel.library.filters import ImageFilter
+
+        rng = np.random.default_rng(2026)
+        stack = rng.integers(0, 65535, size=(4, 64, 64), dtype=np.uint16)
+        pipeline = [['clahe', {'clip_limit': 3.0, 'tile_grid_size': (8, 8)}]]
+        reference = ImageFilter(stack).get_filtered_stack(
+            pipeline, n_workers=1, backend='serial')
+        result = ImageFilter(stack).get_filtered_stack(
+            pipeline, n_workers=2, backend='multiprocessing')
+        np.testing.assert_allclose(result, reference, rtol=1e-6, atol=1e-6)
+
+    def test_invalid_execution_backends(self):
+        print('Testing invalid filtering execution backend options ...')
+        from squirrel.library.filters import ImageFilter
+
+        stack = np.ones((2, 4, 4), dtype=np.uint8)
+        for backend in ('threads', '', 'invalid'):
+            with self.subTest(backend=backend):
+                with self.assertRaisesRegex(ValueError, 'backend'):
+                    ImageFilter(stack).get_filtered_stack(
+                        [['same', {}]], backend=backend)
+        for backend in (None, 1, True):
+            with self.subTest(backend=backend):
+                with self.assertRaisesRegex(TypeError, 'backend'):
+                    ImageFilter(stack).get_filtered_stack(
+                        [['same', {}]], backend=backend)
+        with self.assertRaisesRegex(ValueError, 'n_workers'):
+            ImageFilter(stack).get_filtered_stack(
+                [['same', {}]], n_workers=2, backend='serial')
+
     @unittest.skipUnless(
         __import__('os').environ.get('SQUIRREL_RUN_FILTER_BENCHMARK') == '1',
         'Opt-in benchmark: set SQUIRREL_RUN_FILTER_BENCHMARK=1',
@@ -592,7 +693,8 @@ class TestFilterMultiprocessing(unittest.TestCase):
                 # Warm up imports, FFT machinery, and process startup.
                 ImageFilter(stack[:2]).get_filtered_stack(pipeline, n_workers=workers)
                 samples = []
-                for _ in range(repeats):
+                for run_index in range(filter_repeats):
+                    print(f'    timing: {label}, run {run_index + 1}/{filter_repeats} ...', flush=True)
                     start = time.perf_counter()
                     result = ImageFilter(stack).get_filtered_stack(
                         pipeline, n_workers=workers)
@@ -607,3 +709,175 @@ class TestFilterMultiprocessing(unittest.TestCase):
                       f'{times[1] / times[workers]:.2f}x')
             del stack
         # No speedup assertion: timings vary with machine load and hardware.
+
+    @unittest.skipUnless(
+        __import__('os').environ.get('SQUIRREL_RUN_FILTER_BENCHMARK') == '1',
+        'Opt-in benchmark: set SQUIRREL_RUN_FILTER_BENCHMARK=1',
+    )
+    def test_multiprocessing_chunking_and_threads(self):
+        print('Benchmarking process chunk sizes and threads (informational only) ...')
+        import statistics
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+        from functools import partial
+        from multiprocessing import Pool
+        from squirrel.library.filters import ImageFilter, _filter_slice
+
+        pipeline = [['fft_highpass', dict(sigma=(5, 5))]]
+        sizes = (512, 1024)
+        n_slices = 32
+        repeats = 3
+        rng = np.random.default_rng(42)
+        worker = partial(_filter_slice, filters=pipeline)
+
+        def serial(stack):
+            return ImageFilter(stack).get_filtered_stack(pipeline, n_workers=1)
+
+        def processes(stack, n_workers, chunksize):
+            with Pool(processes=n_workers) as pool:
+                return np.asarray(list(pool.imap(worker, stack, chunksize=chunksize)))
+
+        def threads(stack, n_workers):
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                return np.asarray(list(pool.map(worker, stack)))
+
+        for size in sizes:
+            # Allocate only one stack at a time; discard outputs after each run.
+            stack = rng.integers(0, 65535, size=(n_slices, size, size), dtype=np.uint16)
+            print(f'\n  Image size: {size} x {size} ({n_slices} slices)')
+            configurations = [('serial', serial)]
+            configurations += [
+                (f'processes: 4 workers, chunksize={chunk}',
+                 partial(processes, n_workers=4, chunksize=chunk))
+                for chunk in (1, 2, 4, 8)
+            ]
+            configurations += [
+                (f'threads: {workers} workers', partial(threads, n_workers=workers))
+                for workers in (2, 4)
+            ]
+
+            # Verify equivalence before measuring; do not mix correctness checks
+            # into timed sections. This also catches ordering/dtype regressions.
+            expected = serial(stack)
+            for label, run in configurations[1:]:
+                actual = run(stack)
+                np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6,
+                                           err_msg=label)
+                self.assertEqual(actual.dtype, expected.dtype, label)
+                del actual
+            del expected
+
+            timings = {}
+            for label, run in configurations:
+                # Each timed call includes pool creation, IPC, and output assembly.
+                warmup = run(stack[:2])
+                del warmup
+                samples = []
+                for run_index in range(filter_repeats):
+                    print(f'    timing: {label}, run {run_index + 1}/{filter_repeats} ...', flush=True)
+                    start = time.perf_counter()
+                    result = run(stack)
+                    samples.append(time.perf_counter() - start)
+                    del result
+                timings[label] = statistics.median(samples)
+                print(f'    {label}: {timings[label]:.3f} s median '
+                      f'(runs: {", ".join(f"{t:.3f}" for t in samples)})')
+
+            baseline = timings['serial']
+            for label in list(timings)[1:]:
+                print(f'    Speedup ({label}): {baseline / timings[label]:.2f}x')
+            del stack
+        # No speedup assertion: scheduling, contention, and hardware vary.
+
+
+    @unittest.skipUnless(
+        __import__('os').environ.get('SQUIRREL_RUN_FILTER_BENCHMARK') == '1',
+        'Opt-in benchmark: set SQUIRREL_RUN_FILTER_BENCHMARK=1',
+    )
+    def test_filter_backend_comparison(self):
+        print('Benchmarking filtering backends across filter types (informational only) ...')
+        import statistics
+        import time
+        from squirrel.library.filters import ImageFilter
+
+        import cv2
+        cv2.setNumThreads(1)
+
+        # Keep inputs deterministic and identical for each execution backend.
+        rng = np.random.default_rng(2026)
+        n_slices = 16
+        size = 512
+        repeats = 3
+        stack = rng.integers(0, 65535, size=(n_slices, size, size), dtype=np.uint16)
+        pipelines = (
+            ('gaussian', [['gaussian', {'sigma': 2.0}]]),
+            ('median', [['median', {'radius': 2}]]),
+            ('clahe', [['clahe', {'clip_limit': 3.0,
+                                   'tile_grid_size': (8, 8)}]]),
+            ('fft_highpass', [['fft_highpass', {'sigma': (5, 5)}]]),
+        )
+        configurations = (
+            ('serial', 1, 'serial'),
+            ('processes: 4', 4, 'multiprocessing'),
+            ('threads: 2', 2, 'threading'),
+            ('threads: 4', 4, 'threading'),
+        )
+        print(f'  Stack: {n_slices} x {size} x {size}; repetitions: {repeats}')
+
+        for filter_name, pipeline in pipelines:
+            # CLAHE is substantially more expensive than the other filters.
+            # Use a smaller stack and fewer repetitions for this case.
+            if filter_name == 'clahe':
+                filter_stack = stack[:4, :128, :128]
+                filter_repeats = 1
+            else:
+                filter_stack = stack
+                filter_repeats = repeats
+            print(f'\n  Filter: {filter_name} '
+                  f'({filter_stack.shape[0]} x {filter_stack.shape[1]} x '
+                  f'{filter_stack.shape[2]}; repetitions: {filter_repeats})')
+            image_filter = ImageFilter(filter_stack)
+
+            def run(n_workers, backend):
+                return image_filter.get_filtered_stack(
+                    pipeline, n_workers=n_workers, backend=backend)
+
+            # Validate outputs before timing; timing excludes comparisons.
+            print('    correctness: serial reference ...', flush=True)
+            reference = run(1, 'serial')
+            print('    correctness: serial reference complete', flush=True)
+            for label, n_workers, backend in configurations[1:]:
+                with self.subTest(filter=filter_name, backend=label):
+                    print(f'    correctness: {label} ...', flush=True)
+                    actual = run(n_workers, backend)
+                    print(f'    correctness: {label} complete', flush=True)
+                    np.testing.assert_allclose(
+                        actual, reference, rtol=1e-6, atol=1e-6,
+                        err_msg=f'{filter_name}: {label}')
+                    self.assertEqual(actual.dtype, reference.dtype)
+                    self.assertEqual(actual.shape, reference.shape)
+                    del actual
+            del reference
+
+            timings = {}
+            for label, n_workers, backend in configurations:
+                # Pool creation and output assembly are part of the measurement.
+                print(f'    warm-up: {label} ...', flush=True)
+                warmup = run(n_workers, backend)
+                print(f'    warm-up: {label} complete', flush=True)
+                del warmup
+                samples = []
+                for run_index in range(filter_repeats):
+                    print(f'    timing: {label}, run {run_index + 1}/{filter_repeats} ...', flush=True)
+                    start = time.perf_counter()
+                    result = run(n_workers, backend)
+                    samples.append(time.perf_counter() - start)
+                    del result
+                timings[label] = statistics.median(samples)
+                print(f'    {label}: {timings[label]:.3f} s median '
+                      f'(runs: {", ".join(f"{t:.3f}" for t in samples)})')
+
+            baseline = timings['serial']
+            for label in list(timings)[1:]:
+                print(f'    Speedup ({label}): {baseline / timings[label]:.2f}x')
+        # No performance assertions: execution times are hardware-dependent.

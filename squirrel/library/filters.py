@@ -272,6 +272,11 @@ class ImageFilter:
         return validated
 
     def get_filtered(self, filters, in_array=None, return_intermediates=False, verbose=False):
+        # These options control the return contract and logging; do not
+        # silently interpret integers or strings as booleans.
+        for name, value in (('return_intermediates', return_intermediates), ('verbose', verbose)):
+            if not isinstance(value, (bool, np.bool_)):
+                raise TypeError(f'{name} must be a boolean, got {value!r}')
         steps = self.validate_pipeline(filters)
         result = np.asarray(self._in_array).copy() if in_array is None else np.asarray(in_array)
         intermediates = []

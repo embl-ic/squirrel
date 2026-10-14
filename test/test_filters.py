@@ -524,3 +524,26 @@ class TestSharedBooleanOptionValidation(unittest.TestCase):
                     ImageFilter.validate_pipeline([['same', {key: 1}]])
                 with self.assertRaisesRegex(TypeError, key):
                     ImageFilter.same(image, **{key: 1})
+
+
+class TestFilterExecutionOptions(unittest.TestCase):
+
+    def test_invalid_get_filtered_flags(self):
+        print('Testing get_filtered rejects non-boolean execution options ...')
+        from squirrel.library.filters import ImageFilter
+        image_filter = ImageFilter(np.arange(4).reshape(2, 2))
+        for key in ('return_intermediates', 'verbose'):
+            for value in (0, 1, 'false', None):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaisesRegex(TypeError, key):
+                        image_filter.get_filtered([['same', {}]], **{key: value})
+
+    def test_numpy_boolean_get_filtered_flags(self):
+        print('Testing get_filtered accepts NumPy boolean execution options ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.arange(4).reshape(2, 2)
+        result, intermediates = ImageFilter(image).get_filtered(
+            [['same', {}]], return_intermediates=np.bool_(True), verbose=np.bool_(False))
+        np.testing.assert_array_equal(result, image)
+        self.assertEqual(len(intermediates), 1)
+        np.testing.assert_array_equal(intermediates[0], image)

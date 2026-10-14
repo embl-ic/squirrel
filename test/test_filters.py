@@ -320,3 +320,39 @@ class TestFilterStackWorkers(unittest.TestCase):
         stack = np.arange(24, dtype=np.uint8).reshape(2, 3, 4)
         result = ImageFilter(stack).get_filtered_stack([['same', {}]], n_workers=np.int64(1))
         np.testing.assert_array_equal(result, stack)
+
+
+class TestFilterExceptionConsistency(unittest.TestCase):
+
+    def test_range_types_in_pipeline_and_direct_calls(self):
+        print('Testing range parameter type and value errors ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.arange(4).reshape(2, 2)
+        for value, exception in ((3, TypeError), ('0,1', TypeError),
+                                 ([0, '1'], TypeError), ((0,), ValueError),
+                                 ((2, 1), ValueError), ((0, float('nan')), ValueError)):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(exception, 'step 0.*clip'):
+                    ImageFilter.validate_pipeline([['same', {'clip': value}]])
+                with self.assertRaisesRegex(exception, 'clip'):
+                    ImageFilter.same(image, clip=value)
+
+    def test_filter_mode_type_and_value(self):
+        print('Testing filter_mode type and value errors ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.arange(4).reshape(2, 2)
+        for value, exception in ((None, TypeError), (1, TypeError),
+                                 (['apply'], TypeError), ('multiply', ValueError)):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(exception, 'step 0.*filter_mode'):
+                    ImageFilter.validate_pipeline([['same', {'filter_mode': value}]])
+                with self.assertRaisesRegex(exception, 'filter_mode'):
+                    ImageFilter.same(image, filter_mode=value)
+
+    def test_valid_numpy_range(self):
+        print('Testing valid NumPy range parameters ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.arange(4).reshape(2, 2)
+        pipeline = [['same', {'clip': np.array([1, 2])}]]
+        ImageFilter.validate_pipeline(pipeline)
+        np.testing.assert_array_equal(ImageFilter(image).get_filtered(pipeline), [[1, 1], [2, 2]])

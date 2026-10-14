@@ -17,9 +17,22 @@ def _working_dtype(*arrays):
 def _validate_range(value, name):
     if value is None:
         return None
-    if len(value) != 2 or not np.all(np.isfinite(value)) or value[0] >= value[1]:
+    if not isinstance(value, (list, tuple, np.ndarray)):
+        raise TypeError(f'{name} must be a sequence of two real numbers, got {value!r}')
+    try:
+        values = np.asarray(value)
+        if values.ndim != 1 or values.size != 2:
+            raise ValueError(f'{name} must contain exactly two values, got {value!r}')
+        if values.dtype.kind not in 'iuf':
+            raise TypeError(f'{name} must contain real numbers, got {value!r}')
+        low, high = float(values[0]), float(values[1])
+    except (OverflowError, TypeError, ValueError) as exc:
+        if isinstance(exc, (TypeError, ValueError)) and str(exc).startswith(name):
+            raise
+        raise TypeError(f'{name} must contain real numbers, got {value!r}') from exc
+    if not np.isfinite(low) or not np.isfinite(high) or low >= high:
         raise ValueError(f'{name} must contain two finite, strictly increasing values; got {value!r}')
-    return float(value[0]), float(value[1])
+    return low, high
 
 
 def _safe_cast(array, dtype):
@@ -83,6 +96,8 @@ def filter_wrapper(func):
                             ('zeros_to_mean', zeros_to_mean)):
             if not isinstance(value, (bool, np.bool_)):
                 raise TypeError(f'{name} must be a boolean, got {value!r}')
+        if not isinstance(filter_mode, str):
+            raise TypeError(f'filter_mode must be a string, got {filter_mode!r}')
         if filter_mode not in ('apply', 'add', 'subtract'):
             raise ValueError(f'Unknown filter_mode: {filter_mode!r}')
         clip = _validate_range(clip, 'clip')
@@ -177,6 +192,8 @@ class ImageFilter:
                     raise TypeError(f'{prefix} ({name!r}): {key} must be a boolean, '
                                     f'got {parameters[key]!r}')
             mode = parameters.get('filter_mode', 'apply')
+            if not isinstance(mode, str):
+                raise TypeError(f'{prefix} ({name!r}): filter_mode must be a string, got {mode!r}')
             if mode not in ('apply', 'add', 'subtract'):
                 raise ValueError(f'{prefix} ({name!r}): invalid filter_mode {mode!r}')
             if parameters.get('normalization_range') is not None and not parameters.get('normalize', False):
@@ -186,7 +203,7 @@ class ImageFilter:
                     try:
                         _validate_range(parameters[key], key)
                     except (ValueError, TypeError) as exc:
-                        raise ValueError(f'{prefix} ({name!r}): {exc}') from exc
+                        raise type(exc)(f'{prefix} ({name!r}): {exc}') from exc
             if parameters.get('cast_dtype') is not None:
                 try:
                     np.dtype(parameters['cast_dtype'])

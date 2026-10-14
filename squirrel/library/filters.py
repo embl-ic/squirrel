@@ -79,6 +79,10 @@ def filter_wrapper(func):
     def wrapper(in_array: np.ndarray, *args, filter_mode='apply', clip=None,
                 normalize=False, normalization_range=None, cast_dtype=None,
                 keep_zeros=False, zeros_to_mean=False, **kwargs):
+        for name, value in (('normalize', normalize), ('keep_zeros', keep_zeros),
+                            ('zeros_to_mean', zeros_to_mean)):
+            if not isinstance(value, (bool, np.bool_)):
+                raise TypeError(f'{name} must be a boolean, got {value!r}')
         if filter_mode not in ('apply', 'add', 'subtract'):
             raise ValueError(f'Unknown filter_mode: {filter_mode!r}')
         clip = _validate_range(clip, 'clip')
@@ -168,6 +172,10 @@ class ImageFilter:
             except TypeError as exc:
                 raise ValueError(f'{prefix} ({name!r}): {exc}') from exc
 
+            for key in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+                if key in parameters and not isinstance(parameters[key], (bool, np.bool_)):
+                    raise TypeError(f'{prefix} ({name!r}): {key} must be a boolean, '
+                                    f'got {parameters[key]!r}')
             mode = parameters.get('filter_mode', 'apply')
             if mode not in ('apply', 'add', 'subtract'):
                 raise ValueError(f'{prefix} ({name!r}): invalid filter_mode {mode!r}')

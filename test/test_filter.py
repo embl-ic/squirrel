@@ -1,6 +1,100 @@
 import unittest
 import warnings
+import sys
+from types import ModuleType
+from unittest.mock import MagicMock, patch
 import numpy as np
+
+
+
+
+class TestFilterWorkflowValidation(unittest.TestCase):
+
+    def test_image_invalid_pipeline_before_io(self):
+        print('Testing image workflow validation before I/O ...')
+        from squirrel.workflows.image import filter_2d_workflow
+        with patch('squirrel.library.io.read_tif_slice') as read_slice:
+            with self.assertRaisesRegex(ValueError, 'unknown filter'):
+                filter_2d_workflow('input.tif', 'output.tif',
+                                   filters=[['unknown_filter', {}]])
+            read_slice.assert_not_called()
+
+    def test_volume_invalid_pipeline_before_io(self):
+        print('Testing volume workflow validation before I/O ...')
+        from squirrel.workflows.volume import filter_2d_workflow
+        with patch('squirrel.library.io.load_data_handle') as load_handle:
+            with self.assertRaisesRegex(ValueError, 'unknown filter'):
+                filter_2d_workflow('input', 'output.ome.zarr',
+                                   filters=[['unknown_filter', {}]], batch_size=8)
+            load_handle.assert_not_called()
+
+
+class TestFilterWorkflowDtype(unittest.TestCase):
+
+    def test_ome_zarr_uses_filtered_dtype(self):
+        print('Testing OME-Zarr output dtype follows filtering ...')
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        stack = np.arange(24, dtype=np.uint16).reshape(3, 2, 4)
+        store = MagicMock()
+        zarr_module = ModuleType('squirrel.library.ome_zarr')
+        zarr_module.OMEZarrStore = MagicMock()
+        zarr_module.OMEZarrStore.create.return_value = store
+
+        for pipeline, expected_dtype in (
+            ([['same', dict(cast_dtype='uint8')]], np.dtype('uint8')),
+            ([['same', dict(filter_mode='add')]], np.dtype('float32')),
+            ([['same', dict(normalize=True)]], np.dtype('float32')),
+        ):
+            with self.subTest(pipeline=pipeline):
+                zarr_module.OMEZarrStore.create.reset_mock()
+                store.reset_mock()
+                with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
+                     patch('squirrel.library.io.get_filetype', return_value='ome_zarr'), \
+                     patch.dict(sys.modules, {'squirrel.library.ome_zarr': zarr_module}):
+                    filter_2d_workflow('input', 'output.ome.zarr', filters=pipeline,
+                                       batch_size=2, n_workers=1)
+                self.assertEqual(zarr_module.OMEZarrStore.create.call_args.kwargs['dtype'], expected_dtype)
+                self.assertEqual(store.write.call_count, 2)
+                for call in store.write.call_args_list:
+                    self.assertEqual(call.kwargs['data'].dtype, expected_dtype)
+
+    def test_invalid_batch_size_before_output_creation(self):
+        print('Testing invalid batch size is rejected before output creation ...')
+        from squirrel.workflows.volume import filter_2d_workflow
+        stack = np.zeros((2, 2, 2), dtype=np.uint16)
+        with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
+             patch('squirrel.library.io.get_filetype', return_value='ome_zarr'):
+            with self.assertRaisesRegex(ValueError, 'batch_size'):
+                filter_2d_workflow('input', 'output.ome.zarr',
+                                   filters=[['same', {}]], batch_size=0)
+
+
+class TestFilterBooleanParameters(unittest.TestCase):
+
+    def test_invalid_boolean_parameters_in_pipeline(self):
+        print('Testing invalid boolean filter options in pipeline ...')
+        from squirrel.library.filters import ImageFilter
+        for key in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+            for value in (1, 0, 'true', None):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaisesRegex(TypeError, f'step 0.*{key}'):
+                        ImageFilter.validate_pipeline([['same', {key: value}]])
+
+    def test_invalid_boolean_parameters_direct_call(self):
+        print('Testing invalid boolean filter options in direct calls ...')
+        from squirrel.library.filters import ImageFilter
+        for key in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(TypeError, key):
+                    ImageFilter.same(np.array([1, 2]), **{key: 'false'})
+
+    def test_valid_boolean_parameters(self):
+        print('Testing valid boolean filter options ...')
+        from squirrel.library.filters import ImageFilter
+        pipeline = [['same', dict(normalize=False, keep_zeros=True, zeros_to_mean=False)]]
+        ImageFilter.validate_pipeline(pipeline)
+        np.testing.assert_array_equal(ImageFilter(np.array([0, 1])).get_filtered(pipeline), [0, 1])
 
 
 class TestImageFilter(unittest.TestCase):

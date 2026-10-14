@@ -249,6 +249,8 @@ class ImageFilter:
 
     def get_filtered_stack(self, filters, n_workers=1):
         steps = self.validate_pipeline(filters)
+        if isinstance(n_workers, (bool, np.bool_)) or not isinstance(n_workers, (int, np.integer)) or n_workers < 1:
+            raise ValueError(f'n_workers must be a positive integer, got {n_workers!r}')
         if not (2 < self._in_array.ndim <= 4):
             raise RuntimeError('Stack processing requires 3D or 4D input')
         if n_workers == 1:

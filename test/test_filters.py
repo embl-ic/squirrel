@@ -301,3 +301,22 @@ class TestFilterSpecificValidation(unittest.TestCase):
             ['invert', dict(invert_range=(0, 1))],
         ])
         self.assertEqual(len(steps), 4)
+
+
+class TestFilterStackWorkers(unittest.TestCase):
+
+    def test_invalid_worker_count(self):
+        print('Testing invalid stack filter worker counts ...')
+        from squirrel.library.filters import ImageFilter
+        stack = np.zeros((2, 3, 4), dtype=np.uint8)
+        for n_workers in (0, -1, 1.5, '2', True, None):
+            with self.subTest(n_workers=n_workers):
+                with self.assertRaisesRegex(ValueError, 'n_workers'):
+                    ImageFilter(stack).get_filtered_stack([['same', {}]], n_workers=n_workers)
+
+    def test_numpy_integer_worker_count(self):
+        print('Testing NumPy integer stack filter worker count ...')
+        from squirrel.library.filters import ImageFilter
+        stack = np.arange(24, dtype=np.uint8).reshape(2, 3, 4)
+        result = ImageFilter(stack).get_filtered_stack([['same', {}]], n_workers=np.int64(1))
+        np.testing.assert_array_equal(result, stack)

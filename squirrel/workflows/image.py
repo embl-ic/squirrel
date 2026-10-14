@@ -16,6 +16,7 @@ def filter_2d_workflow(
         print(f'filters = {filters}')
 
     from squirrel.library.filters import ImageFilter
+    ImageFilter.validate_pipeline(filters)
 
     from squirrel.library.io import read_tif_slice, write_tif_slice
     img = read_tif_slice(input_filepath, return_filepath=False)

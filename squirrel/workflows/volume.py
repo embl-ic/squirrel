@@ -561,6 +561,7 @@ def filter_2d_workflow(
         print(f'n_workers = {n_workers}')
 
     from squirrel.library.filters import ImageFilter
+    ImageFilter.validate_pipeline(filters)
     from squirrel.library.io import load_data_handle, write_stack, get_filetype
 
     stack_handle, stack_shape = load_data_handle(input_path, key, pattern)

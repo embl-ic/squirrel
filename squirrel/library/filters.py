@@ -104,6 +104,12 @@ def filter_wrapper(func):
         if normalization_range is not None and not normalize:
             raise ValueError('normalization_range requires normalize=True')
         normalization_range = _validate_range(normalization_range, 'normalization_range')
+        # Apply the same image-independent, filter-specific checks to direct
+        # calls as to JSON pipelines (including positional filter arguments).
+        bound = inspect.signature(func).bind(in_array, *args, **kwargs)
+        filter_parameters = {key: value for key, value in bound.arguments.items()
+                             if key != 'in_array'}
+        ImageFilter.validate_pipeline([[func.__name__, filter_parameters]])
         original = np.asarray(in_array)
         zero_mask = original == 0 if keep_zeros else None
         if zeros_to_mean:

@@ -356,3 +356,41 @@ class TestFilterExceptionConsistency(unittest.TestCase):
         pipeline = [['same', {'clip': np.array([1, 2])}]]
         ImageFilter.validate_pipeline(pipeline)
         np.testing.assert_array_equal(ImageFilter(image).get_filtered(pipeline), [[1, 1], [2, 2]])
+
+
+class TestDirectFilterParameterValidation(unittest.TestCase):
+
+    def test_invalid_filter_parameters_direct_and_pipeline(self):
+        print('Testing consistent filter-specific validation for direct calls and pipelines ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.arange(25, dtype=np.uint8).reshape(5, 5)
+        cases = (
+            ('gaussian', {'sigma': -1}, 'sigma'),
+            ('fft_highpass', {'sigma': (1, -2)}, 'sigma'),
+            ('median', {'radius': -1}, 'radius'),
+            ('median', {'radius': 1, 'on_binned': 0}, 'on_binned'),
+            ('median', {'radius': 1, 'sample_footprint': -1}, 'sample_footprint'),
+            ('invert', {'invert_range': (2, 1)}, 'invert_range'),
+        )
+        for name, parameters, message in cases:
+            with self.subTest(name=name, parameters=parameters):
+                with self.assertRaisesRegex(ValueError, message):
+                    ImageFilter.validate_pipeline([[name, parameters]])
+                with self.assertRaisesRegex(ValueError, message):
+                    getattr(ImageFilter, name)(image, **parameters)
+
+    def test_positional_arguments_are_validated(self):
+        print('Testing direct positional filter argument validation ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.ones((5, 5), dtype=np.uint8)
+        with self.assertRaisesRegex(ValueError, 'radius'):
+            ImageFilter.median(image, -1)
+        with self.assertRaisesRegex(ValueError, 'sigma'):
+            ImageFilter.fft_highpass(image, -1)
+
+    def test_valid_direct_filter_call(self):
+        print('Testing valid direct filter parameters ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.arange(25, dtype=np.uint8).reshape(5, 5)
+        np.testing.assert_array_equal(ImageFilter.same(image), image)
+        np.testing.assert_array_equal(ImageFilter.invert(image, invert_range=(0, 255)), 255 - image)

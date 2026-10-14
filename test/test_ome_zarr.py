@@ -1,4 +1,5 @@
 import tempfile
+import multiprocessing
 import unittest
 import warnings
 from pathlib import Path
@@ -6,6 +7,19 @@ from pathlib import Path
 import numpy as np
 
 from squirrel.library.ome_zarr import OMEZarrStore
+
+
+def _write_ome_zarr_batch_worker(path, start, stop, result_queue):
+    """Open the store independently, as a separate Snakemake worker would."""
+    try:
+        store = OMEZarrStore(path, mode="a")
+        z, y, x = np.indices((stop - start, 16, 16))
+        data = ((z + start) * 37 + y * 7 + x * 3).astype(np.uint16)
+        store.write(0, (start, 0, 0), data, update_pyramid=True,
+                    check_pyramid_alignment=True)
+        result_queue.put((start, None))
+    except Exception as exc:
+        result_queue.put((start, repr(exc)))
 
 
 class TestOMEZarr(unittest.TestCase):
@@ -340,7 +354,147 @@ class TestOMEZarr(unittest.TestCase):
             )
 
 
+    # -------------------------------------------------------------------------
+    # AMST2-style batched writes and pyramid consistency
+    # -------------------------------------------------------------------------
+
+    def _make_batch_store(self, name):
+        return OMEZarrStore.create(
+            Path(self.tmpdir.name) / name,
+            shape=(19, 16, 16),
+            chunks=(1, 8, 8),
+            shards=None,
+            downsample_factors=((1, 2, 2), (1, 2, 2)),
+            ome_version="0.4",
+            zarr_format=2,
+        )
+
+    @staticmethod
+    def _batch_data(start, stop):
+        z, y, x = np.indices((stop - start, 16, 16))
+        return ((z + start) * 37 + y * 7 + x * 3).astype(np.uint16)
+
+    def test_batched_writes_match_sequential_and_rebuild(self):
+        print('Testing OME-Zarr: aligned batch writes match sequential pyramid rebuild ...')
+        batched = self._make_batch_store('batched.ome.zarr')
+        reference = self._make_batch_store('reference.ome.zarr')
+        for start, stop in ((0, 8), (8, 16), (16, 19)):
+            batched.write(0, (start, 0, 0), self._batch_data(start, stop),
+                          update_pyramid=True, check_pyramid_alignment=True)
+        reference.dataset(0)[:] = self._batch_data(0, 19)
+        reference.rebuild_pyramid()
+        for level in range(3):
+            np.testing.assert_array_equal(batched.dataset(level)[:], reference.dataset(level)[:])
+
+    def test_unaligned_batch_is_rejected_before_writing(self):
+        print('Testing OME-Zarr: pyramid alignment rejects unsafe batch boundaries ...')
+        store = OMEZarrStore.create(
+            Path(self.tmpdir.name) / 'unaligned.ome.zarr',
+            shape=(16, 16, 16), chunks=(2, 8, 8), shards=None,
+            downsample_factors=((2, 2, 2), (2, 2, 2)),
+            ome_version='0.4', zarr_format=2,
+        )
+        data = self._batch_data(0, 6)
+        with self.assertRaises(ValueError):
+            store.write(0, (0, 0, 0), data, update_pyramid=True,
+                        check_pyramid_alignment=True)
+        np.testing.assert_array_equal(store.dataset(0)[:], 0)
+
+    def test_concurrent_batch_writes_match_rebuilt_pyramid(self):
+        print('Testing OME-Zarr: independent concurrent writers match a rebuilt pyramid ...')
+        ctx = multiprocessing.get_context('spawn')
+        batches = ((0, 8), (8, 16), (16, 19))
+        for repetition in range(3):
+            store = self._make_batch_store(f'parallel_{repetition}.ome.zarr')
+            reference = self._make_batch_store(f'parallel_ref_{repetition}.ome.zarr')
+            queue = ctx.Queue()
+            workers = [ctx.Process(target=_write_ome_zarr_batch_worker,
+                                   args=(str(Path(self.tmpdir.name) / f'parallel_{repetition}.ome.zarr'),
+                                         start, stop, queue))
+                       for start, stop in batches]
+            try:
+                for worker in workers:
+                    worker.start()
+                for worker in workers:
+                    worker.join(timeout=60)
+                for worker in workers:
+                    if worker.is_alive():
+                        worker.terminate()
+                        worker.join()
+                        self.fail('Concurrent OME-Zarr worker timed out')
+                    self.assertEqual(worker.exitcode, 0)
+                results = [queue.get(timeout=5) for _ in workers]
+                self.assertTrue(all(error is None for _, error in results), results)
+            finally:
+                for worker in workers:
+                    if worker.is_alive():
+                        worker.terminate()
+                        worker.join()
+                queue.close()
+                queue.join_thread()
+
+            reference.dataset(0)[:] = self._batch_data(0, 19)
+            reference.rebuild_pyramid()
+            for level in range(3):
+                np.testing.assert_array_equal(store.dataset(level)[:],
+                                              reference.dataset(level)[:])
+
+    def test_concurrent_retry_of_one_batch_matches_reference(self):
+        print('Testing OME-Zarr: retry after concurrent batch writes preserves all pyramid levels ...')
+        store = self._make_batch_store('parallel_retry.ome.zarr')
+        ctx = multiprocessing.get_context('spawn')
+        queue = ctx.Queue()
+        batches = ((0, 8), (8, 16), (16, 19))
+        workers = [ctx.Process(target=_write_ome_zarr_batch_worker,
+                               args=(str(Path(self.tmpdir.name) / 'parallel_retry.ome.zarr'),
+                                     start, stop, queue)) for start, stop in batches]
+        try:
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=60)
+                if worker.is_alive():
+                    worker.terminate()
+                    worker.join()
+                    self.fail('Concurrent OME-Zarr worker timed out')
+                self.assertEqual(worker.exitcode, 0)
+            results = [queue.get(timeout=5) for _ in workers]
+            self.assertTrue(all(error is None for _, error in results), results)
+        finally:
+            for worker in workers:
+                if worker.is_alive():
+                    worker.terminate()
+                    worker.join()
+            queue.close()
+            queue.join_thread()
+        store.write(0, (8, 0, 0), self._batch_data(8, 16),
+                    update_pyramid=True, check_pyramid_alignment=True)
+        reference = self._make_batch_store('parallel_retry_reference.ome.zarr')
+        reference.dataset(0)[:] = self._batch_data(0, 19)
+        reference.rebuild_pyramid()
+        for level in range(3):
+            np.testing.assert_array_equal(store.dataset(level)[:], reference.dataset(level)[:])
+
+    def test_batch_retry_reproduces_pyramid(self):
+        print('Testing OME-Zarr: overwriting a completed batch preserves pyramid consistency ...')
+        store = self._make_batch_store('retry.ome.zarr')
+        reference = self._make_batch_store('retry_reference.ome.zarr')
+        for start, stop in ((0, 8), (8, 16), (16, 19)):
+            store.write(0, (start, 0, 0), self._batch_data(start, stop),
+                        update_pyramid=True, check_pyramid_alignment=True)
+        store.write(0, (8, 0, 0), self._batch_data(8, 16),
+                    update_pyramid=True, check_pyramid_alignment=True)
+        reference.dataset(0)[:] = self._batch_data(0, 19)
+        reference.rebuild_pyramid()
+        for level in range(3):
+            np.testing.assert_array_equal(store.dataset(level)[:], reference.dataset(level)[:])
+
+
+
+
+
 # import tempfile
+# import multiprocessing
 # import unittest
 # import warnings
 # from pathlib import Path

@@ -815,7 +815,7 @@ def apply_auto_pad_workflow(
     else:
         stack_bounds = transforms.get_metadata('bounds')
 
-    transforms.auto_pad(stack_bounds, extra_padding=16)
+    transforms, _ = transforms.auto_pad(stack_bounds, extra_padding=16)
     transforms.write(out_filepath)
 
 

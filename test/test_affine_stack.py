@@ -619,6 +619,60 @@ class TestAffineStack(unittest.TestCase):
         for a, b in zip(stack, loaded):
             self.assertEqual(a, b)
 
+    def test_write_read_preserves_nonzero_pivot(self):
+        print('Testing AffineStack: nonzero pivot survives JSON round-trip ...')
+
+        import json
+        import tempfile
+        from pathlib import Path
+
+        angle = np.pi / 4
+        c, s = np.cos(angle), np.sin(angle)
+        transforms = np.array([
+            [[c, -s, 3.0], [s, c, -2.0]],
+            [[1.0, 0.0, 4.0], [0.0, 1.0, 5.0]],
+        ])
+        stack = AffineStack.from_array(
+            transforms, pivot=[12.0, 23.0], sequenced=True,
+            metadata={"bounds": [[0, 10, 0, 10]]},
+        )
+        points = np.array([[1.0, 2.0], [9.0, 8.0]])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / 'pivot.json'
+            stack.write(filepath)
+            with filepath.open(encoding='utf-8') as f:
+                payload = json.load(f)
+            loaded = AffineStack.read(filepath)
+
+        self.assertEqual(payload['pivot'], [12.0, 23.0])
+        np.testing.assert_allclose(loaded.pivot, stack.pivot)
+        self.assertEqual(loaded.sequenced, stack.sequenced)
+        self.assertEqual(loaded.metadata, stack.metadata)
+        for original, restored in zip(stack, loaded):
+            np.testing.assert_allclose(restored.apply(points), original.apply(points))
+
+    def test_read_without_pivot_defaults_to_zero(self):
+        print('Testing AffineStack: read JSON without pivot field ...')
+
+        import json
+        import tempfile
+        from pathlib import Path
+
+        payload = {
+            "transforms": [[1, 0, 3, 0, 1, 4]],
+            "sequenced": False,
+            "metadata": {"source": "older-format"},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / 'no_pivot.json'
+            filepath.write_text(json.dumps(payload), encoding='utf-8')
+            loaded = AffineStack.read(filepath)
+
+        np.testing.assert_allclose(loaded.pivot, [0.0, 0.0])
+        self.assertEqual(loaded.metadata, payload['metadata'])
+        np.testing.assert_allclose(loaded[0].apply([[0, 0]]), [[3, 4]])
+
     def test_write_read_empty(self):
         print('Testing AffineStack: write/read empty stack ...')
 
@@ -1627,3 +1681,68 @@ class TestAffineStackApplyZStep(unittest.TestCase):
             "at least two transforms",
         ):
             stack.apply_z_step()
+
+
+class TestPrecisionPreservingSequencing(unittest.TestCase):
+
+    @staticmethod
+    def _fixture(length):
+        rng = np.random.default_rng(71)
+        angles = rng.normal(0, 0.008, length)
+        translations = rng.normal(0, 0.2, (2, length))
+        matrices = np.zeros((length, 3, 3), dtype=np.float64)
+        matrices[:, 2, 2] = 1
+        matrices[:, 0, 0] = np.cos(angles)
+        matrices[:, 1, 1] = np.cos(angles)
+        matrices[:, 0, 1] = -np.sin(angles)
+        matrices[:, 1, 0] = np.sin(angles)
+        matrices[:, 0, 2] = translations[0]
+        matrices[:, 1, 2] = translations[1]
+        return matrices
+
+    @staticmethod
+    def _prefix_products(matrices, dtype):
+        groups = [[matrix.astype(dtype)] for matrix in matrices]
+        while len(groups) > 1:
+            merged = []
+            for idx in range(0, len(groups), 2):
+                left = groups[idx]
+                if idx + 1 == len(groups):
+                    merged.append(left)
+                else:
+                    right = groups[idx + 1]
+                    merged.append(left + [left[-1] @ value for value in right])
+            groups = merged
+        return np.stack(groups[0])
+
+    def test_hierarchical_sequencing_preserves_pivot_metadata_and_order(self):
+        print('Testing AffineStack: hierarchical sequencing, pivot, metadata and order ...')
+        matrices = self._fixture(17)
+        pivot = [7.0, 11.0]
+        stack = AffineStack.from_array(matrices, pivot=pivot, metadata={'tag': 'test'})
+        result = stack.to_sequenced()
+        expected = self._prefix_products(matrices, np.float64)
+        np.testing.assert_allclose(result.as_homogeneous(), expected, rtol=1e-13, atol=1e-13)
+        np.testing.assert_array_equal(result.pivot, pivot)
+        self.assertEqual(result.metadata, {'tag': 'test'})
+        self.assertTrue(result.sequenced)
+        self.assertFalse(stack.sequenced)
+        self.assertEqual(len(result), 17)
+
+    def test_hierarchical_sequencing_11000_slice_precision(self):
+        print('Testing AffineStack: 11000-slice hierarchical precision against extended reference ...')
+        if np.finfo(np.longdouble).eps >= np.finfo(np.float64).eps:
+            self.skipTest('Extended precision not available on this platform')
+        matrices = self._fixture(11000)
+        stack = AffineStack.from_array(matrices, pivot=[7.0, 11.0])
+        actual = stack.to_sequenced().as_homogeneous()
+        reference = self._prefix_products(matrices, np.longdouble)
+        running = np.eye(3)
+        sequential = np.empty_like(matrices)
+        for idx, matrix in enumerate(matrices):
+            running = running @ matrix
+            sequential[idx] = running
+        hierarchical_error = np.max(np.abs(actual.astype(np.longdouble) - reference))
+        sequential_error = np.max(np.abs(sequential.astype(np.longdouble) - reference))
+        print(f'Hierarchical error: {hierarchical_error:.3e}; sequential error: {sequential_error:.3e}')
+        self.assertLess(hierarchical_error, sequential_error)

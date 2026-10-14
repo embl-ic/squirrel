@@ -394,3 +394,27 @@ class TestDirectFilterParameterValidation(unittest.TestCase):
         image = np.arange(25, dtype=np.uint8).reshape(5, 5)
         np.testing.assert_array_equal(ImageFilter.same(image), image)
         np.testing.assert_array_equal(ImageFilter.invert(image, invert_range=(0, 255)), 255 - image)
+
+
+class TestFilterErrorMessages(unittest.TestCase):
+
+    def test_direct_validation_identifies_filter_and_parameter(self):
+        print('Testing direct filter validation error context ...')
+        from squirrel.library.filters import ImageFilter
+        with self.assertRaisesRegex(ValueError, r"Filter 'median': .*radius") as caught:
+            ImageFilter.median(np.ones((3, 3)), radius=-1)
+        self.assertNotIn('step 0', str(caught.exception))
+
+    def test_pipeline_execution_identifies_step_once(self):
+        print('Testing pipeline execution error context ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.ones((3, 3), dtype=np.float32)
+        with self.assertRaisesRegex(ValueError, r"Filter step 1 \('fft_highpass'\): .*2D") as caught:
+            ImageFilter(image[0]).get_filtered([['same', {}], ['fft_highpass', {}]])
+        self.assertEqual(str(caught.exception).count("'fft_highpass'"), 1)
+
+    def test_direct_execution_identifies_filter(self):
+        print('Testing direct filter execution error context ...')
+        from squirrel.library.filters import ImageFilter
+        with self.assertRaisesRegex(ValueError, r"Filter 'fft_highpass': .*2D"):
+            ImageFilter.fft_highpass(np.ones(5))

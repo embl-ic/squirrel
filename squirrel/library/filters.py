@@ -109,7 +109,13 @@ def filter_wrapper(func):
         bound = inspect.signature(func).bind(in_array, *args, **kwargs)
         filter_parameters = {key: value for key, value in bound.arguments.items()
                              if key != 'in_array'}
-        ImageFilter.validate_pipeline([[func.__name__, filter_parameters]])
+        try:
+            ImageFilter.validate_pipeline([[func.__name__, filter_parameters]])
+        except (TypeError, ValueError) as exc:
+            # Direct calls have no pipeline index: identify the filter instead.
+            prefix = f"Filter step 0 ({func.__name__!r}): "
+            detail = str(exc).removeprefix(prefix)
+            raise type(exc)(f"Filter {func.__name__!r}: {detail}") from exc
         original = np.asarray(in_array)
         zero_mask = original == 0 if keep_zeros else None
         if zeros_to_mean:
@@ -120,7 +126,10 @@ def filter_wrapper(func):
                 prepared = original.copy()
         else:
             prepared = original
-        filtered = np.asarray(func(prepared, *args, **kwargs))
+        try:
+            filtered = np.asarray(func(prepared, *args, **kwargs))
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"Filter {func.__name__!r}: {exc}") from exc
         if filtered.shape != original.shape:
             raise ValueError(f'{func.__name__} returned shape {filtered.shape}, expected {original.shape}')
         if filter_mode != 'apply':
@@ -265,7 +274,10 @@ class ImageFilter:
             try:
                 result = getattr(self, name)(result, **kwargs)
             except (ValueError, TypeError) as exc:
-                raise type(exc)(f'Filter step {index} ({name!r}): {exc}') from exc
+                # A direct filter call already identifies the filter; avoid
+                # repeating it when adding the pipeline step context.
+                detail = str(exc).removeprefix(f"Filter {name!r}: ")
+                raise type(exc)(f'Filter step {index} ({name!r}): {detail}') from exc
             if return_intermediates:
                 intermediates.append(result.copy())
         return (result, intermediates) if return_intermediates else result

@@ -500,3 +500,27 @@ class TestFilterWorkflowArgumentErrors(unittest.TestCase):
         preview = write_slice.call_args_list[0].args[0]
         self.assertEqual(preview.dtype, np.uint8)
         np.testing.assert_array_equal(preview, 0)
+
+
+class TestSharedBooleanOptionValidation(unittest.TestCase):
+
+    def test_numpy_boolean_options_direct_and_pipeline(self):
+        print('Testing shared boolean validation accepts NumPy booleans ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.array([[0, 1], [2, 3]], dtype=np.uint8)
+        for key in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+            with self.subTest(key=key):
+                options = {key: np.bool_(False)}
+                ImageFilter.validate_pipeline([['same', options]])
+                np.testing.assert_array_equal(ImageFilter.same(image, **options), image)
+
+    def test_boolean_option_errors_direct_and_pipeline(self):
+        print('Testing shared boolean validation rejects non-boolean values ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.array([[1, 2]], dtype=np.uint8)
+        for key in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(TypeError, key):
+                    ImageFilter.validate_pipeline([['same', {key: 1}]])
+                with self.assertRaisesRegex(TypeError, key):
+                    ImageFilter.same(image, **{key: 1})

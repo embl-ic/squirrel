@@ -87,15 +87,20 @@ def fft_highpass(image: np.ndarray, sigma=(10, 10)) -> np.ndarray:
     return np.fft.ifft2(np.fft.fft2(image) * response).real
 
 
+def _validate_boolean_options(parameters, prefix=''):
+    """Validate common boolean options without coercing truthy values."""
+    for name in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+        if name in parameters and not isinstance(parameters[name], (bool, np.bool_)):
+            raise TypeError(f'{prefix}{name} must be a boolean, got {parameters[name]!r}')
+
+
 def filter_wrapper(func):
     @wraps(func)
     def wrapper(in_array: np.ndarray, *args, filter_mode='apply', clip=None,
                 normalize=False, normalization_range=None, cast_dtype=None,
                 keep_zeros=False, zeros_to_mean=False, **kwargs):
-        for name, value in (('normalize', normalize), ('keep_zeros', keep_zeros),
-                            ('zeros_to_mean', zeros_to_mean)):
-            if not isinstance(value, (bool, np.bool_)):
-                raise TypeError(f'{name} must be a boolean, got {value!r}')
+        _validate_boolean_options(dict(normalize=normalize, keep_zeros=keep_zeros,
+                                       zeros_to_mean=zeros_to_mean))
         if not isinstance(filter_mode, str):
             raise TypeError(f'filter_mode must be a string, got {filter_mode!r}')
         if filter_mode not in ('apply', 'add', 'subtract'):
@@ -207,10 +212,7 @@ class ImageFilter:
             except TypeError as exc:
                 raise ValueError(f'{prefix} ({name!r}): {exc}') from exc
 
-            for key in ('normalize', 'keep_zeros', 'zeros_to_mean'):
-                if key in parameters and not isinstance(parameters[key], (bool, np.bool_)):
-                    raise TypeError(f'{prefix} ({name!r}): {key} must be a boolean, '
-                                    f'got {parameters[key]!r}')
+            _validate_boolean_options(parameters, prefix=f'{prefix} ({name!r}): ')
             mode = parameters.get('filter_mode', 'apply')
             if not isinstance(mode, str):
                 raise TypeError(f'{prefix} ({name!r}): filter_mode must be a string, got {mode!r}')

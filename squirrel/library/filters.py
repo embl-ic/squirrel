@@ -117,6 +117,11 @@ def filter_wrapper(func):
             detail = str(exc).removeprefix(prefix)
             raise type(exc)(f"Filter {func.__name__!r}: {detail}") from exc
         original = np.asarray(in_array)
+        if original.size == 0:
+            raise ValueError(f"Filter {func.__name__!r}: input image must not be empty")
+        if original.dtype.kind not in 'iuf':
+            raise TypeError(f"Filter {func.__name__!r}: input image must have a real numeric dtype, "
+                            f"got {original.dtype}")
         zero_mask = original == 0 if keep_zeros else None
         if zeros_to_mean:
             nonzero = original != 0
@@ -286,8 +291,11 @@ class ImageFilter:
         steps = self.validate_pipeline(filters)
         if isinstance(n_workers, (bool, np.bool_)) or not isinstance(n_workers, (int, np.integer)) or n_workers < 1:
             raise ValueError(f'n_workers must be a positive integer, got {n_workers!r}')
-        if not (2 < self._in_array.ndim <= 4):
-            raise RuntimeError('Stack processing requires 3D or 4D input')
+        stack = np.asarray(self._in_array)
+        if stack.ndim not in (3, 4):
+            raise ValueError(f'Stack processing requires 3D or 4D input, got {stack.ndim}D')
+        if stack.size == 0 or stack.shape[0] == 0:
+            raise ValueError('Stack processing requires a nonempty input stack')
         if n_workers == 1:
             return np.asarray([self.get_filtered(steps, in_array=sl) for sl in self._in_array])
         with Pool(processes=n_workers) as pool:

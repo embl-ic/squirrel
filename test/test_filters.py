@@ -418,3 +418,37 @@ class TestFilterErrorMessages(unittest.TestCase):
         from squirrel.library.filters import ImageFilter
         with self.assertRaisesRegex(ValueError, r"Filter 'fft_highpass': .*2D"):
             ImageFilter.fft_highpass(np.ones(5))
+
+
+class TestFilterInputEdgeCases(unittest.TestCase):
+
+    def test_empty_image_direct_and_pipeline(self):
+        print('Testing empty filter input rejection ...')
+        from squirrel.library.filters import ImageFilter
+        image = np.empty((0, 3), dtype=np.float32)
+        with self.assertRaisesRegex(ValueError, "Filter 'same': .*empty"):
+            ImageFilter.same(image)
+        with self.assertRaisesRegex(ValueError, r"Filter step 0 \('same'\): .*empty"):
+            ImageFilter(image).get_filtered([['same', {}]])
+
+    def test_unsupported_image_dtypes(self):
+        print('Testing unsupported filter input dtypes ...')
+        from squirrel.library.filters import ImageFilter
+        for image in (np.array([['a']], dtype=object),
+                      np.array([[1 + 2j]]), np.array([[True]])):
+            with self.subTest(dtype=image.dtype):
+                with self.assertRaisesRegex(TypeError, 'real numeric dtype'):
+                    ImageFilter.same(image)
+                with self.assertRaisesRegex(TypeError, 'step 0.*real numeric dtype'):
+                    ImageFilter(image).get_filtered([['same', {}]])
+
+    def test_invalid_stack_dimensions_and_empty_stack(self):
+        print('Testing invalid and empty stack inputs ...')
+        from squirrel.library.filters import ImageFilter
+        for shape, message in (((3, 3), '3D or 4D'),
+                               ((1, 1, 1, 1, 1), '3D or 4D'),
+                               ((0, 3, 3), 'nonempty'),
+                               ((2, 0, 3), 'nonempty')):
+            with self.subTest(shape=shape):
+                with self.assertRaisesRegex(ValueError, message):
+                    ImageFilter(np.zeros(shape)).get_filtered_stack([['same', {}]])

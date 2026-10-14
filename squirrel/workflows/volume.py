@@ -573,16 +573,30 @@ def filter_2d_workflow(
         write_stack(out_path, filtered_stack, key=out_key)
         return
 
-    assert get_filetype(out_path) in ['dir', 'ome_zarr'], 'Batched processing only implemented for tif stack output!'
-    if get_filetype(out_path) == 'ome_zarr':
+    if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
+        raise ValueError('batch_size must be a positive integer')
+    if stack_shape[0] < 1:
+        raise ValueError('Cannot filter an empty stack')
+
+    out_filetype = get_filetype(out_path)
+    if out_filetype not in ('dir', 'ome_zarr'):
+        raise ValueError('Batched filtering requires a directory or OME-Zarr output')
+
+    # Filter the first batch before creating the output container: the pipeline
+    # may change dtype via casting, normalization, or arithmetic modes.
+    first_batch = ImageFilter(stack_handle[:min(batch_size, stack_shape[0])]).get_filtered_stack(
+        filters, n_workers=n_workers
+    )
+    output_dtype = first_batch.dtype
+    if out_filetype == 'ome_zarr':
         if verbose:
-            print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {stack_handle.dtype}')
+            print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {output_dtype}')
         from squirrel.library.ome_zarr import OMEZarrStore
         oz = OMEZarrStore.create(
             path=out_path,
             shape=stack_shape,
-            dtype=stack_handle.dtype,
-            chunks=(min(int(batch_size / 4), 128), 256, 256), 
+            dtype=output_dtype,
+            chunks=(max(1, min(int(batch_size / 4), 128)), 256, 256),
             downsample_factors=(2, 2),
             shards=None,
             overwrite=False
@@ -607,10 +621,16 @@ def filter_2d_workflow(
         
     for zidx in range(0, stack_shape[0], batch_size):
 
-        imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
         if verbose:
             print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
-        filtered_substack = imf.get_filtered_stack(filters, n_workers=n_workers)
+        if zidx == 0:
+            filtered_substack = first_batch
+        else:
+            imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
+            filtered_substack = imf.get_filtered_stack(filters, n_workers=n_workers)
+            if filtered_substack.dtype != output_dtype:
+                raise TypeError(f'Filter output dtype changed between batches: '
+                                f'{output_dtype} -> {filtered_substack.dtype}')
         if verbose:
             print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
         _write_batch(filtered_substack, zidx, out_path)

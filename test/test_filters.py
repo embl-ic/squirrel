@@ -452,3 +452,51 @@ class TestFilterInputEdgeCases(unittest.TestCase):
             with self.subTest(shape=shape):
                 with self.assertRaisesRegex(ValueError, message):
                     ImageFilter(np.zeros(shape)).get_filtered_stack([['same', {}]])
+
+
+class TestFilterWorkflowArgumentErrors(unittest.TestCase):
+
+    def test_invalid_volume_arguments_before_input_io(self):
+        print('Testing invalid volume filtering arguments before input I/O ...')
+        from squirrel.workflows.volume import filter_2d_workflow
+        with patch('squirrel.library.io.load_data_handle') as load_handle, \
+             patch('squirrel.library.io.get_filetype', return_value='dir'):
+            for kwargs in (dict(batch_size=0), dict(batch_size=True),
+                           dict(batch_size=1.5), dict(n_workers=0),
+                           dict(n_workers=True), dict(n_workers='2')):
+                with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, 'batch_size|n_workers'):
+                    filter_2d_workflow('input', 'output', filters=[['same', {}]], **kwargs)
+            load_handle.assert_not_called()
+
+    def test_unsupported_batched_output_before_input_io(self):
+        print('Testing unsupported batched output is rejected before input I/O ...')
+        from squirrel.workflows.volume import filter_2d_workflow
+        with patch('squirrel.library.io.load_data_handle') as load_handle, \
+             patch('squirrel.library.io.get_filetype', return_value='h5'):
+            with self.assertRaisesRegex(ValueError, 'directory or OME-Zarr'):
+                filter_2d_workflow('input', 'output.h5', filters=[['same', {}]], batch_size=2)
+            load_handle.assert_not_called()
+
+    def test_empty_unbatched_stack_before_output_io(self):
+        print('Testing empty unbatched volume is rejected before output I/O ...')
+        from squirrel.workflows.volume import filter_2d_workflow
+        stack = np.empty((0, 3, 3), dtype=np.uint8)
+        with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
+             patch('squirrel.library.io.write_stack') as write_stack:
+            with self.assertRaisesRegex(ValueError, 'empty stack'):
+                filter_2d_workflow('input', 'output', filters=[['same', {}]])
+            write_stack.assert_not_called()
+
+    def test_constant_intermediate_preview(self):
+        print('Testing constant intermediate previews avoid division by zero ...')
+        from squirrel.workflows.image import filter_2d_workflow
+        image = np.ones((3, 3), dtype=np.uint8)
+        with patch('squirrel.library.io.read_tif_slice', return_value=image), \
+             patch('squirrel.library.io.write_tif_slice') as write_slice, \
+             patch('squirrel.workflows.image.os.makedirs'):
+            filter_2d_workflow('input.tif', 'output.tif', filters=[['same', {}]],
+                               save_intermediates=True)
+        self.assertGreaterEqual(write_slice.call_count, 2)
+        preview = write_slice.call_args_list[0].args[0]
+        self.assertEqual(preview.dtype, np.uint8)
+        np.testing.assert_array_equal(preview, 0)

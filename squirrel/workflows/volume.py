@@ -562,9 +562,23 @@ def filter_2d_workflow(
 
     from squirrel.library.filters import ImageFilter
     ImageFilter.validate_pipeline(filters)
+    # Reject invalid workflow arguments before reading the input stack.
+    if isinstance(n_workers, (bool, np.bool_)) or not isinstance(n_workers, (int, np.integer)) or n_workers < 1:
+        raise ValueError(f'n_workers must be a positive integer, got {n_workers!r}')
+    if batch_size is not None and (
+            isinstance(batch_size, (bool, np.bool_))
+            or not isinstance(batch_size, (int, np.integer)) or batch_size < 1):
+        raise ValueError(f'batch_size must be a positive integer, got {batch_size!r}')
+
     from squirrel.library.io import load_data_handle, write_stack, get_filetype
+    if batch_size is not None:
+        out_filetype = get_filetype(out_path)
+        if out_filetype not in ('dir', 'ome_zarr'):
+            raise ValueError(f'Batched filtering requires a directory or OME-Zarr output, got {out_filetype!r}')
 
     stack_handle, stack_shape = load_data_handle(input_path, key, pattern)
+    if stack_shape[0] < 1:
+        raise ValueError('Cannot filter an empty stack')
 
     if batch_size is None:
 
@@ -572,15 +586,6 @@ def filter_2d_workflow(
         filtered_stack = imf.get_filtered_stack(filters, n_workers=n_workers)
         write_stack(out_path, filtered_stack, key=out_key)
         return
-
-    if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
-        raise ValueError('batch_size must be a positive integer')
-    if stack_shape[0] < 1:
-        raise ValueError('Cannot filter an empty stack')
-
-    out_filetype = get_filetype(out_path)
-    if out_filetype not in ('dir', 'ome_zarr'):
-        raise ValueError('Batched filtering requires a directory or OME-Zarr output')
 
     # Filter the first batch before creating the output container: the pipeline
     # may change dtype via casting, normalization, or arithmetic modes.

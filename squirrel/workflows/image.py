@@ -26,9 +26,19 @@ def filter_2d_workflow(
         filtered_image = imf.get_filtered(filters, verbose=verbose)
     else:
         filtered_image, intermediates = imf.get_filtered(filters, return_intermediates=True, verbose=verbose)
-        if not os.path.exists(os.path.splitext(out_filepath)[0]):
-            os.mkdir(os.path.splitext(out_filepath)[0])
-        for idx, intermediate in enumerate(intermediates):
-            write_tif_slice(((intermediate.astype(np.float64) - intermediate.min()) / (intermediate.max() - intermediate.min()) * 255).astype(np.uint8), os.path.splitext(out_filepath)[0], '{:03d}.tif'.format(idx))
+        intermediate_dir = os.path.splitext(out_filepath)[0]
+        # Prepare every preview before creating the directory or writing files.
+        previews = []
+        for intermediate in intermediates:
+            values = intermediate.astype(np.float64)
+            low, high = values.min(), values.max()
+            if high == low:
+                preview = np.zeros(values.shape, dtype=np.uint8)
+            else:
+                preview = ((values - low) / (high - low) * 255).astype(np.uint8)
+            previews.append(preview)
+        os.makedirs(intermediate_dir, exist_ok=True)
+        for idx, preview in enumerate(previews):
+            write_tif_slice(preview, intermediate_dir, '{:03d}.tif'.format(idx))
 
     write_tif_slice(filtered_image, *os.path.split(out_filepath))

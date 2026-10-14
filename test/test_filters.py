@@ -163,3 +163,47 @@ class TestPipelineValidation(unittest.TestCase):
         result = ImageFilter(img).get_filtered([['same', dict(cast_dtype='float32')]])
         np.testing.assert_array_equal(result, img)
         self.assertEqual(result.dtype, np.float32)
+
+
+class TestFilterSpecificValidation(unittest.TestCase):
+
+    def test_invalid_gaussian_sigma(self):
+        print('Testing invalid Gaussian sigma values ...')
+        from squirrel.library.filters import ImageFilter
+        for sigma in (0, -1, float('nan'), float('inf'), (1, -2), (1, 2, 3)):
+            with self.subTest(sigma=sigma), self.assertRaisesRegex(ValueError, "step 0.*sigma"):
+                ImageFilter.validate_pipeline([['gaussian', dict(sigma=sigma)]])
+
+    def test_invalid_fft_sigma(self):
+        print('Testing invalid FFT highpass sigma values ...')
+        from squirrel.library.filters import ImageFilter
+        for sigma in (0, (-1, 2), (1, 2, 3)):
+            with self.subTest(sigma=sigma), self.assertRaisesRegex(ValueError, "step 0.*sigma"):
+                ImageFilter.validate_pipeline([['fft_highpass', dict(sigma=sigma)]])
+
+    def test_invalid_median_parameters(self):
+        print('Testing invalid median parameters ...')
+        from squirrel.library.filters import ImageFilter
+        for kwargs in (dict(), dict(radius=1, footprint=np.ones((3, 3))),
+                       dict(radius=-1), dict(radius=1.5), dict(radius=(1, -2)),
+                       dict(footprint=np.zeros((3, 3))), dict(radius=1, on_binned=0),
+                       dict(radius=1, sample_footprint=-1), dict(radius=1, random_seed=-1)):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, 'step 0'):
+                ImageFilter.validate_pipeline([['median', kwargs]])
+
+    def test_invalid_invert_range(self):
+        print('Testing invalid inversion range ...')
+        from squirrel.library.filters import ImageFilter
+        with self.assertRaisesRegex(ValueError, 'step 0.*invert_range'):
+            ImageFilter.validate_pipeline([['invert', dict(invert_range=(2, 1))]])
+
+    def test_valid_filter_specific_parameters(self):
+        print('Testing valid filter-specific parameters ...')
+        from squirrel.library.filters import ImageFilter
+        steps = ImageFilter.validate_pipeline([
+            ['gaussian', dict(sigma=1.5)],
+            ['fft_highpass', dict(sigma=(2, 3))],
+            ['median', dict(radius=(1, 2), on_binned=2, sample_footprint=3, random_seed=42)],
+            ['invert', dict(invert_range=(0, 1))],
+        ])
+        self.assertEqual(len(steps), 4)

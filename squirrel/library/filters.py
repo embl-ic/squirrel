@@ -184,6 +184,43 @@ class ImageFilter:
                     np.dtype(parameters['cast_dtype'])
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f'{prefix} ({name!r}): invalid cast_dtype: {exc}') from exc
+            # Validate image-independent filter parameters before processing any data.
+            try:
+                if name in ('gaussian', 'gaussian_gradient_magnitude', 'fft_highpass'):
+                    sigma = np.asarray(parameters.get('sigma', 1.0 if name != 'fft_highpass' else (10, 10)))
+                    if sigma.ndim > 1 or sigma.size not in (1, 2):
+                        raise ValueError('sigma must be a scalar or a pair of positive finite numbers')
+                    if not np.issubdtype(sigma.dtype, np.number) or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
+                        raise ValueError('sigma must contain positive finite numbers')
+                elif name == 'median':
+                    radius = parameters.get('radius')
+                    footprint = parameters.get('footprint')
+                    if (radius is None) == (footprint is None):
+                        raise ValueError('supply exactly one of radius and footprint')
+                    if radius is not None:
+                        radii = (radius,) if np.isscalar(radius) else radius
+                        if not isinstance(radii, (tuple, list, np.ndarray)) or len(radii) not in (1, 2) or any(
+                            not isinstance(r, (int, np.integer)) or isinstance(r, (bool, np.bool_)) or r < 0
+                            for r in radii
+                        ):
+                            raise ValueError('radius must be a nonnegative integer or pair of nonnegative integers')
+                    else:
+                        mask = np.asarray(footprint)
+                        if mask.ndim != 2 or not np.any(mask):
+                            raise ValueError('footprint must be a nonempty 2D mask')
+                    for key in ('on_binned', 'sample_footprint'):
+                        value = parameters.get(key, 1 if key == 'on_binned' else None)
+                        if value is not None and (not isinstance(value, (int, np.integer)) or
+                                                  isinstance(value, (bool, np.bool_)) or value < 1):
+                            raise ValueError(f'{key} must be a positive integer')
+                    seed = parameters.get('random_seed')
+                    if seed is not None and (not isinstance(seed, (int, np.integer)) or
+                                             isinstance(seed, (bool, np.bool_)) or seed < 0):
+                        raise ValueError('random_seed must be a nonnegative integer or None')
+                elif name == 'invert' and parameters.get('invert_range') is not None:
+                    _validate_range(parameters['invert_range'], 'invert_range')
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f'{prefix} ({name!r}): {exc}') from exc
             validated.append((name, parameters.copy()))
         return validated
 

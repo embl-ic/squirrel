@@ -95,6 +95,14 @@ def _validate_boolean_options(parameters, prefix=''):
 
 
 def filter_wrapper(func):
+    """Decorate an image filter with shared processing and validation options.
+
+    The wrapped callable accepts ``filter_mode`` (apply/add/subtract),
+    ``clip``, ``normalize``, ``normalization_range``, ``cast_dtype``,
+    ``keep_zeros``, and ``zeros_to_mean`` in addition to filter-specific
+    arguments. The result retains the input shape; invalid options raise
+    ``TypeError`` or ``ValueError``.
+    """
     @wraps(func)
     def wrapper(in_array: np.ndarray, *args, filter_mode='apply', clip=None,
                 normalize=False, normalization_range=None, cast_dtype=None,
@@ -165,13 +173,41 @@ def filter_wrapper(func):
 
 
 class ImageFilter:
-    def __init__(self, in_array):
+    def __init__(self, in_array: np.ndarray):
+        """Create a filter executor for an image or stack.
+
+        Parameters
+        ----------
+        in_array : numpy.ndarray
+            Source image for ``get_filtered`` or stack for
+            ``get_filtered_stack``. Input validation occurs at execution.
+        """
         self._in_array = in_array
 
     @classmethod
-    def validate_pipeline(cls, filters):
-        """Validate a JSON-compatible pipeline and return normalized steps.
+    def validate_pipeline(cls, filters: list | tuple) -> list[tuple[str, dict]]:
+        """Validate a JSON-compatible sequence of filter steps.
 
+        Parameters
+        ----------
+        filters : list or tuple
+            Sequence of ``[filter_name, parameter_dict]`` pairs. Filter
+            names must be available on :class:`ImageFilter`.
+
+        Returns
+        -------
+        list of tuple[str, dict]
+            Validated ``(name, copied_parameters)`` pairs.
+
+        Raises
+        ------
+        TypeError
+            A pipeline, name, or parameter has an invalid type.
+        ValueError
+            A step is malformed or a parameter value is invalid.
+
+        Notes
+        -----
         Validation is independent of image data. Image-dependent constraints
         (such as input dimensionality) are checked when filters execute.
         """
@@ -271,7 +307,33 @@ class ImageFilter:
             validated.append((name, parameters.copy()))
         return validated
 
-    def get_filtered(self, filters, in_array=None, return_intermediates=False, verbose=False):
+    def get_filtered(self, filters: list | tuple, in_array: np.ndarray | None = None,
+                     return_intermediates: bool = False, verbose: bool = False
+                     ) -> np.ndarray | tuple[np.ndarray, list[np.ndarray]]:
+        """Apply a validated pipeline to one image.
+
+        Parameters
+        ----------
+        filters : list or tuple
+            Pipeline of ``[filter_name, parameter_dict]`` steps.
+        in_array : numpy.ndarray or None, optional
+            Override the image supplied at initialization.
+        return_intermediates : bool, optional
+            Return a copy of the result after each pipeline step.
+        verbose : bool, optional
+            Print each step before execution.
+
+        Returns
+        -------
+        numpy.ndarray or tuple[numpy.ndarray, list[numpy.ndarray]]
+            Filtered image, optionally accompanied by intermediate images.
+
+        Raises
+        ------
+        TypeError, ValueError
+            If validation or a filter execution fails. Execution errors
+            include the failing pipeline step index and filter name.
+        """
         # These options control the return contract and logging; do not
         # silently interpret integers or strings as booleans.
         for name, value in (('return_intermediates', return_intermediates), ('verbose', verbose)):
@@ -294,7 +356,27 @@ class ImageFilter:
                 intermediates.append(result.copy())
         return (result, intermediates) if return_intermediates else result
 
-    def get_filtered_stack(self, filters, n_workers=1):
+    def get_filtered_stack(self, filters: list | tuple, n_workers: int = 1) -> np.ndarray:
+        """Apply the same pipeline independently to each stack slice.
+
+        Parameters
+        ----------
+        filters : list or tuple
+            Pipeline of ``[filter_name, parameter_dict]`` steps.
+        n_workers : int, optional
+            Positive number of worker processes. One runs serially.
+
+        Returns
+        -------
+        numpy.ndarray
+            Stack of filtered slices in their original order.
+
+        Raises
+        ------
+        TypeError, ValueError
+            If the pipeline is invalid, the input is not a nonempty 3D or
+            4D stack, or ``n_workers`` is not a positive integer.
+        """
         steps = self.validate_pipeline(filters)
         if isinstance(n_workers, (bool, np.bool_)) or not isinstance(n_workers, (int, np.integer)) or n_workers < 1:
             raise ValueError(f'n_workers must be a positive integer, got {n_workers!r}')
@@ -309,7 +391,8 @@ class ImageFilter:
             return np.asarray(pool.starmap(_filter_slice, [(sl, steps) for sl in self._in_array]))
 
     @classmethod
-    def get_available_filter_names(cls):
+    def get_available_filter_names(cls) -> list[str]:
+        """Return names of publicly available image filter methods."""
         return [name for name, member in inspect.getmembers(cls, inspect.isfunction)
                 if not name.startswith('_') and not name.startswith('get_')]
 

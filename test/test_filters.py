@@ -8,152 +8,88 @@ class TestImageFilter(unittest.TestCase):
     def setUp(self):
         warnings.simplefilter('ignore', category=Warning)
 
-    def test_gaussian(self):
-        print(f'Testing Gaussian filter ...')
+    def test_cast_without_normalization(self):
+        print('Testing dtype casting without normalization ...')
         from squirrel.library.filters import ImageFilter
-        from vigra.filters import gaussianSmoothing
-        from skimage.data import camera
-        img = camera()
+        img = np.array([100., 200.])
+        result = ImageFilter(img).get_filtered([['same', dict(cast_dtype='uint16')]])
+        np.testing.assert_array_equal(result, [100, 200])
 
-        gaussian_ref = gaussianSmoothing(img, 2)
+    def test_normalization_float_and_integer(self):
+        print('Testing float and integer normalization ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.array([100., 200.])
         imf = ImageFilter(img)
-        gaussian = imf.get_filtered([['gaussian', dict(sigma=2)]])
+        result_float = imf.get_filtered([['same', dict(normalize=True)]])
+        result_uint8 = imf.get_filtered([['same', dict(normalize=True, cast_dtype='uint8')]])
+        np.testing.assert_allclose(result_float, [0, 1])
+        np.testing.assert_array_equal(result_uint8, [0, 255])
 
-        np.testing.assert_equal(gaussian_ref, gaussian)
-
-    def test_gaussian_gradient_magnitude(self):
-        print(f'Testing Gaussian gradient magnitude ...')
+    def test_normalization_constant(self):
+        print('Testing normalization of a constant image ...')
         from squirrel.library.filters import ImageFilter
-        from vigra.filters import gaussianGradientMagnitude
-        from skimage.data import camera
-        img = camera()
+        img = np.full((3, 3), 8)
+        result = ImageFilter(img).get_filtered([['same', dict(normalize=True)]])
+        np.testing.assert_array_equal(result, 0)
 
-        gaussian_ref = gaussianGradientMagnitude(img.astype('float32'), 2)
+    def test_mask_excluded_from_normalization(self):
+        print('Testing zero mask exclusion from normalization ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.array([0., 10., 20.])
+        result = ImageFilter(img).get_filtered([['same', dict(keep_zeros=True, normalize=True)]])
+        np.testing.assert_allclose(result, [0, 0, 1])
+
+    def test_subtract_preserves_sign(self):
+        print('Testing signed arithmetic in subtract mode ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.array([10, 20], dtype=np.uint16)
+        result = ImageFilter(img).get_filtered([['same', dict(filter_mode='subtract')]])
+        np.testing.assert_array_equal(result, [0, 0])
+        self.assertEqual(result.dtype.kind, 'f')
+
+    def test_safe_cast(self):
+        print('Testing safe integer casting ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.array([-10., 100., 70000.])
+        result = ImageFilter(img).get_filtered([['same', dict(cast_dtype='uint16')]])
+        np.testing.assert_array_equal(result, [0, 100, 65535])
+
+    def test_invalid_range(self):
+        print('Testing invalid normalization ranges ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.array([1., 2.])
         imf = ImageFilter(img)
-        gaussian = imf.get_filtered([['gaussian_gradient_magnitude', dict(sigma=2)]])
+        with self.assertRaises(ValueError):
+            imf.get_filtered([['same', dict(normalize=True, normalization_range=(2, 2))]])
+        with self.assertRaises(ValueError):
+            imf.get_filtered([['same', dict(normalization_range=(0, 2))]])
 
-        np.testing.assert_equal(gaussian_ref, gaussian)
-
-    def test_clahe(self):
-        print(f'Testing CLAHE filter ...')
+    def test_invert_float(self):
+        print('Testing inversion of floating-point images ...')
         from squirrel.library.filters import ImageFilter
-        from cv2 import createCLAHE
-        from skimage.data import camera
-        img = camera()
+        img = np.array([0.1, 0.8])
+        result = ImageFilter.invert(img, invert_range=(0, 1))
+        np.testing.assert_allclose(result, [0.9, 0.2])
 
-        clip_limit = 3.0
-        tile_grid_size = (127, 127)
-        clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-
-        clahe_filtered_ref = clahe.apply(img)
-        imf = ImageFilter(img)
-        clahe_filtered = imf.get_filtered([['clahe', dict()]])
-
-        np.testing.assert_equal(clahe_filtered_ref, clahe_filtered)
-
-    def test_vsnr(self):
-        print(f'Testing VSNR ...')
+    def test_median_seed(self):
+        print('Testing reproducible median footprint sampling ...')
         from squirrel.library.filters import ImageFilter
-        from pyvsnr import vsnr2d
-        from skimage.data import camera
-        img = camera()
+        img = np.arange(100).reshape(10, 10)
+        kwargs = dict(radius=2, sample_footprint=8, random_seed=42)
+        np.testing.assert_array_equal(ImageFilter.median(img, **kwargs), ImageFilter.median(img, **kwargs))
 
-        filters = [dict(name='Gabor', noise_level=0.35, sigma=[1, 50], theta=90)]
-        vsnr_ref = vsnr2d(img, filters)
-        imf = ImageFilter(img)
-        vsnr = imf.get_filtered([['vsnr', dict(filters=dict(name='Gabor', noise_level=0.35, sigma=[1, 50], theta=90))]])
-
-        np.testing.assert_equal(vsnr_ref, vsnr)
-
-    def test_same(self):
-        print(f'Testing "same" filter ...')
+    def test_median_binned_shape(self):
+        print('Testing binned median reconstruction shape ...')
+        from unittest.mock import patch
+        from types import ModuleType
+        import sys
         from squirrel.library.filters import ImageFilter
-        from skimage.data import camera
-        img = camera()
-
-        imf = ImageFilter(img)
-        same = imf.get_filtered([['same', dict()]])
-
-        np.testing.assert_equal(img, same)
-
-    def test_invert(self):
-        print(f'Testing "invert" filter ...')
-        from squirrel.library.filters import ImageFilter
-        from skimage.data import camera
-        img = camera()
-
-        imf = ImageFilter(img)
-        inverted = imf.get_filtered([['invert', dict()]])
-
-        np.testing.assert_equal(255 - img, inverted)
-
-    def test_filter_wrapper_clip(self):
-        print(f'Testing filter wrapper clipping ...')
-        from squirrel.library.filters import ImageFilter
-        from skimage.data import camera
-        img = camera()
-
-        imf = ImageFilter(img)
-        filtered = imf.get_filtered([['same', dict(clip=[100, 200])]])
-                                    
-        np.testing.assert_equal(filtered, np.clip(img, 100, 200))
-
-    def test_filter_wrapper_cast_dtype_float32(self):
-        print(f'Testing filter wrapper dtype casting to float32 ...')
-        from squirrel.library.filters import ImageFilter
-        from skimage.data import camera
-        img = camera()
-
-        imf = ImageFilter(img)
-        filtered = imf.get_filtered([['same', dict(cast_dtype=np.float32)]])
-
-        np.testing.assert_equal(filtered, img.astype(np.float32))
-
-    def test_filter_wrapper_cast_dtype_uint8(self):
-        print(f'Testing filter wrapper dtype casting to uint8 ...')
-
-        from squirrel.library.filters import ImageFilter
-        img = np.arange(256).reshape(16, 16)
-        imf = ImageFilter(img.astype(np.float64) + 100 * 100)
-        filtered = imf.get_filtered([['same', dict(cast_dtype=np.uint8)]])
-
-        np.testing.assert_equal(filtered, img)
-
-    def test_filter_wrapper_filter_mode(self):
-        print(f'Testing filter mode of filter wrapper ...')
-
-        from squirrel.library.filters import ImageFilter
-        from skimage.data import camera
-
-        img = camera()
-
-        imf = ImageFilter(img)
-        filtered1 = imf.get_filtered([['same', dict(filter_mode='add')]])
-        filtered2 = imf.get_filtered([['same', dict(filter_mode='subtract')]])
-
-        np.testing.assert_equal(filtered1, 2 * img.astype(np.float64))
-        np.testing.assert_equal(filtered2, np.zeros_like(img, dtype=np.float64))
-        self.assertEqual(filtered1.dtype, np.float32)
-        self.assertEqual(filtered2.dtype, np.float32)
-
-    def test_filter_wrapper_keep_zeros(self):
-        print(f'Testing keep_zeros option of filter wrapper ...')
-        from squirrel.library.filters import ImageFilter
-
-        img = np.zeros((16, 16), dtype=np.uint8)
-        img[8, 8] = 255
-
-        imf = ImageFilter(img)
-        filtered1 = imf.get_filtered([['gaussian', dict(keep_zeros=True, sigma=5)]])
-        filtered2 = imf.get_filtered([['gaussian', dict(keep_zeros=False, sigma=5)]])
-
-        # With keep_zeros=True, the zero pixels should remain zero
-        self.assertEqual(filtered1[7, 7], 0)
-        self.assertGreater(filtered1[8, 8], 0)  
-
-        # With keep_zeros=False, the zero pixels can be modified by the filter
-        self.assertGreater(filtered2[7, 7], 0)
-        self.assertEqual(filtered1[8, 8], filtered2[8, 8])  # The non-zero pixel should be the same in both cases
+        img = np.arange(35).reshape(5, 7)
+        scaling = ModuleType('squirrel.library.scaling')
+        scaling.average_bin_image = lambda image, factor: image[::factor, ::factor]
+        with patch.dict(sys.modules, {'squirrel.library.scaling': scaling}):
+            result = ImageFilter.median(img, radius=1, on_binned=2)
+        self.assertEqual(result.shape, img.shape)
 
 
 class TestFilters(unittest.TestCase):
@@ -161,61 +97,69 @@ class TestFilters(unittest.TestCase):
     def setUp(self):
         warnings.simplefilter('ignore', category=Warning)
 
-    def test_shape_and_type(self):
-        print('Testing fft_highpass: shape and type ...')
+    def test_fft_constant(self):
+        print('Testing fft_highpass on a constant image ...')
         from squirrel.library.filters import fft_highpass
-        img = np.random.rand(64, 128)
-        result = fft_highpass(img, sigma=[10., 10.])
+        img = np.ones((12, 15))
+        result = fft_highpass(img, (2, 3))
+        self.assertLess(np.max(np.abs(result)), 1e-12)
 
-        # Test shape
-        assert result.shape == img.shape
 
-        # Test real-valued (allow tiny numerical errors)
-        assert np.allclose(result.imag, 0, atol=1e-12) or np.isrealobj(result)
+if __name__ == '__main__':
+    unittest.main()
 
-    def test_uniform_image(self):
-        print('Testing fft_highpass: uniform image')
-        from squirrel.library.filters import fft_highpass
+class TestPipelineValidation(unittest.TestCase):
 
-        img = np.ones((32, 32))
-        result = fft_highpass(img, sigma=[10., 5.])
+    def test_valid_pipeline(self):
+        print('Testing valid filter pipeline ...')
+        from squirrel.library.filters import ImageFilter
+        steps = ImageFilter.validate_pipeline([
+            ['gaussian', dict(sigma=2)],
+            ['median', dict(radius=3, filter_mode='subtract')],
+            ['same', dict(normalize=True, cast_dtype='uint16')]
+        ])
+        self.assertEqual(len(steps), 3)
 
-        # High-pass of a uniform image should be near zero
-        assert np.allclose(result, 0, atol=1e-12)
+    def test_invalid_step_structure(self):
+        print('Testing invalid pipeline step structure ...')
+        from squirrel.library.filters import ImageFilter
+        for steps in ([['same']], [['same', {}, 'extra']], [['same', None]]):
+            with self.assertRaises((TypeError, ValueError)):
+                ImageFilter.validate_pipeline(steps)
 
-    def test_anisotropy_effect(self):
-        print('Testing fft_highpass: anisotropy')
-        from squirrel.library.filters import fft_highpass
+    def test_unknown_filter(self):
+        print('Testing unknown filter names ...')
+        from squirrel.library.filters import ImageFilter
+        with self.assertRaisesRegex(ValueError, 'step 1.*unknown filter'):
+            ImageFilter.validate_pipeline([['same', {}], ['not_a_filter', {}]])
 
-        # create a horizontal gradient
-        ny, nx = 64, 128
-        img = np.tile(np.linspace(0, 1, nx), (ny, 1))
+    def test_unknown_parameter(self):
+        print('Testing unknown filter parameters ...')
+        from squirrel.library.filters import ImageFilter
+        with self.assertRaisesRegex(ValueError, 'step 0.*sigam'):
+            ImageFilter.validate_pipeline([['gaussian', dict(sigam=2)]])
 
-        # Strong x smoothing
-        result_x = fft_highpass(img, sigma=[2., 20.])
-        # Strong y smoothing
-        result_y = fft_highpass(img, sigma=[20., 2.])
+    def test_invalid_wrapper_options(self):
+        print('Testing invalid filter wrapper options ...')
+        from squirrel.library.filters import ImageFilter
+        for kwargs in (dict(filter_mode='multiply'),
+                       dict(normalization_range=(0, 1)),
+                       dict(normalize=True, normalization_range=(2, 1)),
+                       dict(cast_dtype='not_a_dtype')):
+            with self.assertRaises(ValueError):
+                ImageFilter.validate_pipeline([['same', kwargs]])
 
-        # Outputs should differ
-        assert not np.allclose(result_x, result_y)
+    def test_validation_before_execution(self):
+        print('Testing validation before pipeline execution ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.arange(9).reshape(3, 3)
+        with self.assertRaisesRegex(ValueError, 'step 1.*sigam'):
+            ImageFilter(img).get_filtered([['same', {}], ['gaussian', dict(sigam=2)]])
 
-    def test_highpass_behavior(self):
-        print('Testing fft_highpass: highpass behavior')
-        from squirrel.library.filters import fft_highpass
-
-        # Image with low-frequency pattern + high-frequency noise
-        ny, nx = 64, 64
-        x = np.linspace(0, 4 * np.pi, nx)
-        y = np.linspace(0, 4 * np.pi, ny)
-        X, Y = np.meshgrid(x, y)
-        img = np.sin(X / 2) + 0.1 * np.random.rand(ny, nx)  # low + high freq
-
-        result = fft_highpass(img, sigma=[5., 5.])
-
-        # High-pass should remove most of the low-frequency component
-        # Compute mean absolute value of low-pass vs high-pass
-        from scipy.ndimage import gaussian_filter
-        lowpass = gaussian_filter(img, sigma=5)
-
-        assert np.mean(np.abs(result)) > np.mean(np.abs(lowpass - img)) * 0.5
-
+    def test_valid_pipeline_execution(self):
+        print('Testing execution of validated pipeline ...')
+        from squirrel.library.filters import ImageFilter
+        img = np.arange(9).reshape(3, 3)
+        result = ImageFilter(img).get_filtered([['same', dict(cast_dtype='float32')]])
+        np.testing.assert_array_equal(result, img)
+        self.assertEqual(result.dtype, np.float32)

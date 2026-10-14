@@ -70,6 +70,10 @@ mamba install -c conda-forge pandas
 pip install pyvsnr
 ```
 
+## Documentation
+
+- [Image filtering](docs/filters.md) — Filter reference, pipelines, normalization, stack processing, and parallel execution.
+
 ## Usage
 
 The main functions can be used directly after activation of the 

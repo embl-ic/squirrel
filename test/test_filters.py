@@ -547,3 +547,63 @@ class TestFilterExecutionOptions(unittest.TestCase):
         np.testing.assert_array_equal(result, image)
         self.assertEqual(len(intermediates), 1)
         np.testing.assert_array_equal(intermediates[0], image)
+
+
+class TestFilterMultiprocessing(unittest.TestCase):
+
+    def test_multiprocessing_consistency(self):
+        print('Testing multiprocessing produces the same filtered stack as serial execution ...')
+        from squirrel.library.filters import ImageFilter
+
+        rng = np.random.default_rng(42)
+        stack = rng.integers(0, 65535, size=(8, 64, 64), dtype=np.uint16)
+        pipeline = [['fft_highpass', dict(sigma=(5, 5))]]
+        serial = ImageFilter(stack).get_filtered_stack(pipeline, n_workers=1)
+        parallel = ImageFilter(stack).get_filtered_stack(pipeline, n_workers=2)
+        np.testing.assert_allclose(parallel, serial, rtol=1e-6, atol=1e-6)
+        self.assertEqual(parallel.dtype, serial.dtype)
+
+    @unittest.skipUnless(
+        __import__('os').environ.get('SQUIRREL_RUN_FILTER_BENCHMARK') == '1',
+        'Opt-in benchmark: set SQUIRREL_RUN_FILTER_BENCHMARK=1',
+    )
+    def test_multiprocessing_performance(self):
+        print('Benchmarking multiprocessing across image sizes (informational only) ...')
+        import statistics
+        import time
+        from squirrel.library.filters import ImageFilter
+
+        pipeline = [['fft_highpass', dict(sigma=(5, 5))]]
+        image_sizes = (256, 512, 1024)
+        n_slices = 32
+        repeats = 3
+        worker_counts = (1, 2, 4)
+        rng = np.random.default_rng(42)
+
+        print(f'  Stack depth: {n_slices}; repetitions: {repeats}; '
+              f'worker counts: {worker_counts}')
+        for size in image_sizes:
+            # Allocate only one stack size at a time to limit peak memory use.
+            stack = rng.integers(0, 65535,
+                                 size=(n_slices, size, size), dtype=np.uint16)
+            times = {}
+            print(f'\n  Image size: {size} x {size} ({n_slices} slices)')
+            for workers in worker_counts:
+                # Warm up imports, FFT machinery, and process startup.
+                ImageFilter(stack[:2]).get_filtered_stack(pipeline, n_workers=workers)
+                samples = []
+                for _ in range(repeats):
+                    start = time.perf_counter()
+                    result = ImageFilter(stack).get_filtered_stack(
+                        pipeline, n_workers=workers)
+                    samples.append(time.perf_counter() - start)
+                    del result
+                times[workers] = statistics.median(samples)
+                print(f'    {workers} worker(s): {times[workers]:.3f} s median '
+                      f'(runs: {", ".join(f"{t:.3f}" for t in samples)})')
+
+            for workers in worker_counts[1:]:
+                print(f'    Speedup with {workers} workers: '
+                      f'{times[1] / times[workers]:.2f}x')
+            del stack
+        # No speedup assertion: timings vary with machine load and hardware.

@@ -1,6 +1,6 @@
 """Image filtering and JSON-compatible filter pipelines."""
 import inspect
-from functools import wraps
+from functools import partial, wraps
 from multiprocessing import Pool
 
 import numpy as np
@@ -386,9 +386,12 @@ class ImageFilter:
         if stack.size == 0 or stack.shape[0] == 0:
             raise ValueError('Stack processing requires a nonempty input stack')
         if n_workers == 1:
-            return np.asarray([self.get_filtered(steps, in_array=sl) for sl in self._in_array])
-        with Pool(processes=n_workers) as pool:
-            return np.asarray(pool.starmap(_filter_slice, [(sl, steps) for sl in self._in_array]))
+            return np.asarray([self.get_filtered(steps, in_array=sl) for sl in stack])
+        # imap consumes stack slices lazily instead of materializing a list of
+        # (slice, pipeline) tasks. It also preserves the original slice order.
+        worker = partial(_filter_slice, filters=steps)
+        with Pool(processes=int(n_workers)) as pool:
+            return np.asarray(list(pool.imap(worker, stack, chunksize=1)))
 
     @classmethod
     def get_available_filter_names(cls) -> list[str]:

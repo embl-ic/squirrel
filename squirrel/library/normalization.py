@@ -2,6 +2,85 @@
 import numpy as np
 
 
+def _validate_pair(value, name, *, unit=False):
+    """Validate two strictly increasing finite real values."""
+    if not isinstance(value, (tuple, list, np.ndarray)):
+        raise TypeError(f'{name} must be a pair of real numbers')
+    values = np.asarray(value)
+    if values.shape != (2,) or values.dtype.kind not in 'iuf':
+        raise TypeError(f'{name} must be a pair of real numbers')
+    low, high = map(float, values)
+    if not np.isfinite([low, high]).all() or low >= high:
+        raise ValueError(f'{name} must be finite and strictly increasing')
+    if unit and (low < 0 or high > 1):
+        raise ValueError(f'{name} must lie in [0, 1]')
+    return low, high
+
+
+def get_normalization_limits(image, method='minmax', quantiles=(0.01, 0.99), mask=None, ignore_zeros=False):
+    """Return finite intensity limits; return None for empty/constant selections."""
+    if method not in ('minmax', 'quantile'):
+        raise ValueError(f'Unknown normalization method: {method!r}')
+    quantiles = _validate_pair(quantiles, 'quantiles', unit=True)
+    if not isinstance(ignore_zeros, (bool, np.bool_)):
+        raise TypeError('ignore_zeros must be boolean')
+    data = np.asarray(image)
+    if mask is not None:
+        mask = np.asarray(mask)
+        if mask.shape != data.shape or mask.dtype.kind != 'b':
+            raise ValueError('mask must be boolean and match image shape')
+        data = data[mask]
+    data = data[np.isfinite(data)]
+    if ignore_zeros:
+        data = data[data != 0]
+    if data.size == 0:
+        return None
+    low, high = (np.quantile(data, quantiles) if method == 'quantile'
+                 else (np.min(data), np.max(data)))
+    if low >= high:
+        return None
+    return float(low), float(high)
+
+
+def normalize_image(image, method='minmax', quantiles=(0.01, 0.99),
+                    normalization_range=None, anchors=(0.0, 1.0),
+                    output_dtype='float32', mask=None, ignore_zeros=False,
+                    keep_zeros=False):
+    """Linearly map input limits to fractional output anchors, clipping to dtype range.
+
+    Integer outputs use their full dtype range; floating outputs use [0, 1].
+    Degenerate or empty estimation sets produce zeros. Mask only selects pixels
+    for limit estimation; keep_zeros restores original zero pixels.
+    """
+    data = np.asarray(image)
+    dtype = np.dtype(output_dtype)
+    if dtype.kind not in 'fiu':
+        raise TypeError('output_dtype must be a real numeric dtype')
+    anchors = _validate_pair(anchors, 'anchors', unit=True)
+    if method not in ('minmax', 'quantile'):
+        raise ValueError(f'Unknown normalization method: {method!r}')
+    _validate_pair(quantiles, 'quantiles', unit=True)
+    if not isinstance(keep_zeros, (bool, np.bool_)):
+        raise TypeError('keep_zeros must be boolean')
+    limits = (_validate_pair(normalization_range, 'normalization_range')
+              if normalization_range is not None else
+              get_normalization_limits(data, method, quantiles, mask, ignore_zeros))
+    if limits is None:
+        return np.zeros(data.shape, dtype=dtype)
+    low, high = limits
+    work = data.astype(np.float64)
+    fraction = (work - low) / (high - low)
+    fraction = anchors[0] + fraction * (anchors[1] - anchors[0])
+    fraction = np.clip(np.nan_to_num(fraction, nan=0., posinf=1., neginf=0.), 0, 1)
+    if dtype.kind in 'iu':
+        info = np.iinfo(dtype)
+        fraction = fraction * (float(info.max) - float(info.min)) + float(info.min)
+    result = fraction.astype(dtype)
+    if keep_zeros:
+        result[data == 0] = 0
+    return result
+
+
 def _get_quantiles(array, quantiles=(0.1, 0.9), threshold=(1, 254), dilate_background=0):
     from copy import deepcopy
     this_array = deepcopy(array)
@@ -13,28 +92,21 @@ def _get_quantiles(array, quantiles=(0.1, 0.9), threshold=(1, 254), dilate_backg
     return np.quantile(array_, quantiles[0]), np.quantile(array_, quantiles[1])
 
 
-def _normalize(pixels, alow, ahigh, qlow, qhigh, keep_zeros=False):
-    zeros = None if not keep_zeros else pixels == 0
-    max_val = np.iinfo(pixels.dtype).max
-    pixels = pixels.astype('float64')
-    pixels -= qlow
-    pixels /= qhigh - qlow
-    pixels *= ahigh - alow
-    pixels += alow
-    pixels[pixels < 0] = 0
-    pixels[pixels > max_val] = max_val
-    pixels = np.round(pixels / max_val * 255).astype('uint8')
-    if keep_zeros:
-        pixels[zeros] = 0
-    return pixels
-
-
 def apply_quantiles(image, quantiles=(0.1, 0.9), anchors=(0.2, 0.8), dilate_background=0, keep_zeros=False):
-    threshold = (1, np.iinfo(image.dtype).max - 1)
-    qlow, qhigh = _get_quantiles(image, quantiles, threshold=threshold, dilate_background=dilate_background)
-    alow, ahigh = np.array(anchors) * np.iinfo(image.dtype).max
-    image = _normalize(image, alow, ahigh, qlow, qhigh, keep_zeros=keep_zeros)
-    return image
+    """Normalize quantiles while excluding saturated/background pixels."""
+    image = np.asarray(image)
+    if image.dtype.kind not in 'iu':
+        raise TypeError('apply_quantiles requires an integer image')
+    max_value = np.iinfo(image.dtype).max
+    estimation_mask = (image > 1) & (image < max_value - 1)
+    if dilate_background:
+        from vigra.filters import discErosion, gaussianSmoothing
+        foreground = (gaussianSmoothing(image, 1.0) > 1).astype('uint8')
+        background = 1 - discErosion(foreground, dilate_background)
+        estimation_mask &= background == 0
+    return normalize_image(image, method='quantile', quantiles=quantiles,
+                           anchors=anchors, mask=estimation_mask,
+                           keep_zeros=keep_zeros, output_dtype='uint8')
 
 
 def normalize_slices(
@@ -76,26 +148,24 @@ def normalize_slices(
     return np.array(result_stack)
 
 
-def _adjust_greyscale_in_image(
-        img,
-        greys_in=None,
-        greys_out=None,
-        cast_dtype='uint8'
-):
-
-    if greys_in is None:
-        greys_in = [np.min(img), np.max(img)]
+def _adjust_greyscale_in_image(img, greys_in=None, greys_out=None, cast_dtype='uint8'):
+    """Map an input grey interval to an output grey interval."""
+    dtype = np.dtype(cast_dtype)
+    if dtype.kind not in 'iu':
+        raise TypeError('adjust_greyscale requires an integer output dtype')
+    info = np.iinfo(dtype)
     if greys_out is None:
-        greys_out = [np.iinfo(cast_dtype).min, np.iinfo(cast_dtype).max]
-
-    img = img.astype('float32')
-    img -= greys_in[0]
-    img /= greys_in[1] - greys_in[0]
-    img *= greys_out[1] - greys_out[0]
-    img += greys_out[0]
-    img[img < 0] = 0
-    img[img > np.iinfo(cast_dtype).max] = np.iinfo(cast_dtype).max
-    return img.astype(cast_dtype)
+        greys_out = (info.min, info.max)
+    if greys_in is None:
+        greys_in = (np.min(img), np.max(img))
+    if greys_out[0] == greys_out[1]:
+        raise ValueError('greys_out must contain distinct values')
+    if greys_out[0] < info.min or greys_out[1] > info.max:
+        raise ValueError('greys_out must be within the output dtype range')
+    anchors = ((greys_out[0] - info.min) / (info.max - info.min),
+               (greys_out[1] - info.min) / (info.max - info.min))
+    return normalize_image(img, normalization_range=greys_in, anchors=anchors,
+                           output_dtype=dtype)
 
 
 def adjust_greyscale(

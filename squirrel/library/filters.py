@@ -6,6 +6,8 @@ from multiprocessing import Pool, get_context
 
 import numpy as np
 
+from squirrel.library.normalization import normalize_image, _validate_pair
+
 
 def _working_dtype(*arrays):
     """Select a float dtype suitable for arithmetic on input arrays."""
@@ -47,31 +49,6 @@ def _safe_cast(array, dtype):
     return array.astype(dtype)
 
 
-def _normalize(array, output_dtype, normalization_range=None, valid_mask=None):
-    """Normalize to [0, 1] or the destination integer dtype range."""
-    array = np.asarray(array)
-    dtype = np.dtype(output_dtype)
-    if dtype.kind not in 'fiu':
-        raise TypeError(f'Normalization requires a real numeric output dtype, got {dtype}')
-    supplied_range = _validate_range(normalization_range, 'normalization_range')
-    working = array.astype(np.float64)
-    if supplied_range is None:
-        selected = working if valid_mask is None else working[valid_mask]
-        selected = selected[np.isfinite(selected)]
-        if selected.size == 0:
-            return np.zeros(array.shape, dtype=np.float64)
-        low, high = float(selected.min()), float(selected.max())
-        if high == low:
-            return np.zeros(array.shape, dtype=np.float64)
-    else:
-        low, high = supplied_range
-    scaled = (np.clip(working, low, high) - low) / (high - low)
-    if np.issubdtype(dtype, np.integer):
-        limits = np.iinfo(dtype)
-        scaled = scaled * (float(limits.max) - float(limits.min)) + float(limits.min)
-    return scaled
-
-
 def fft_highpass(image: np.ndarray, sigma=(10, 10)) -> np.ndarray:
     """FFT Gaussian high-pass on a 2D periodic image; sigma is (y, x)."""
     image = np.asarray(image)
@@ -100,6 +77,7 @@ def filter_wrapper(func):
 
     The wrapped callable accepts ``filter_mode`` (apply/add/subtract),
     ``clip``, ``normalize``, ``normalization_range``, ``cast_dtype``,
+    ``normalization_method``, ``quantiles``, ``anchors``,
     ``keep_zeros``, and ``zeros_to_mean`` in addition to filter-specific
     arguments. The result retains the input shape; invalid options raise
     ``TypeError`` or ``ValueError``.
@@ -107,6 +85,8 @@ def filter_wrapper(func):
     @wraps(func)
     def wrapper(in_array: np.ndarray, *args, filter_mode='apply', clip=None,
                 normalize=False, normalization_range=None, cast_dtype=None,
+                normalization_method='minmax', quantiles=(0.01, 0.99),
+                anchors=(0.0, 1.0),
                 keep_zeros=False, zeros_to_mean=False, **kwargs):
         _validate_boolean_options(dict(normalize=normalize, keep_zeros=keep_zeros,
                                        zeros_to_mean=zeros_to_mean))
@@ -118,6 +98,14 @@ def filter_wrapper(func):
         if normalization_range is not None and not normalize:
             raise ValueError('normalization_range requires normalize=True')
         normalization_range = _validate_range(normalization_range, 'normalization_range')
+        if normalization_method not in ('minmax', 'quantile'):
+            raise ValueError(f'Unknown normalization_method: {normalization_method!r}')
+        _validate_pair(quantiles, 'quantiles', unit=True)
+        _validate_pair(anchors, 'anchors', unit=True)
+        if not normalize and (normalization_method != 'minmax' or
+                              tuple(quantiles) != (0.01, 0.99) or
+                              tuple(anchors) != (0.0, 1.0)):
+            raise ValueError('normalization options require normalize=True')
         # Apply the same image-independent, filter-specific checks to direct
         # calls as to JSON pipelines (including positional filter arguments).
         bound = inspect.signature(func).bind(in_array, *args, **kwargs)
@@ -162,9 +150,10 @@ def filter_wrapper(func):
         dtype = np.dtype(cast_dtype) if cast_dtype is not None else None
         if normalize:
             target_dtype = dtype if dtype is not None else np.dtype('float32')
-            valid_mask = ~zero_mask if zero_mask is not None else None
-            result = _normalize(result, target_dtype, normalization_range, valid_mask)
-            result = _safe_cast(result, target_dtype)
+            result = normalize_image(
+                result, method=normalization_method, quantiles=quantiles,
+                normalization_range=normalization_range, anchors=anchors,
+                output_dtype=target_dtype, mask=~zero_mask if zero_mask is not None else None)
         elif dtype is not None:
             result = _safe_cast(result, dtype)
         if zero_mask is not None:
@@ -257,6 +246,19 @@ class ImageFilter:
                 raise ValueError(f'{prefix} ({name!r}): invalid filter_mode {mode!r}')
             if parameters.get('normalization_range') is not None and not parameters.get('normalize', False):
                 raise ValueError(f'{prefix} ({name!r}): normalization_range requires normalize=True')
+            try:
+                normalization_method = parameters.get('normalization_method', 'minmax')
+                if normalization_method not in ('minmax', 'quantile'):
+                    raise ValueError(f'Unknown normalization_method: {normalization_method!r}')
+                _validate_pair(parameters.get('quantiles', (0.01, 0.99)), 'quantiles', unit=True)
+                _validate_pair(parameters.get('anchors', (0., 1.)), 'anchors', unit=True)
+                if not parameters.get('normalize', False) and (
+                    normalization_method != 'minmax' or
+                    tuple(parameters.get('quantiles', (0.01, 0.99))) != (0.01, 0.99) or
+                    tuple(parameters.get('anchors', (0., 1.))) != (0., 1.)):
+                    raise ValueError('normalization options require normalize=True')
+            except (TypeError, ValueError) as exc:
+                raise type(exc)(f'{prefix} ({name!r}): {exc}') from exc
             for key in ('clip', 'normalization_range'):
                 if parameters.get(key) is not None:
                     try:

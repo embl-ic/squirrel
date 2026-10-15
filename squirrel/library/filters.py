@@ -1,5 +1,6 @@
 """Image filtering and JSON-compatible filter pipelines."""
 import inspect
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial, wraps
 from multiprocessing import Pool, get_context
@@ -365,7 +366,8 @@ class ImageFilter:
         return (result, intermediates) if return_intermediates else result
 
     def get_filtered_stack(self, filters: list | tuple, n_workers: int = 1,
-                           backend: str = 'threading') -> np.ndarray:
+                           backend: str = 'threading', progress: bool = True,
+                           progress_callback=None) -> np.ndarray:
         """Apply the same pipeline independently to each stack slice.
 
         Parameters
@@ -377,6 +379,11 @@ class ImageFilter:
         backend : str, optional
             ``"threading"`` (default), ``"multiprocessing"``, or ``"serial"``.
             The serial backend requires ``n_workers=1``.
+        progress : bool, optional
+            Show a slice-level progress bar when no callback is supplied.
+        progress_callback : callable or None, optional
+            Called with the number of newly completed slices. Allows workflows
+            to maintain a single progress bar across batches.
 
         Returns
         -------
@@ -405,24 +412,41 @@ class ImageFilter:
             raise ValueError(f'Stack processing requires 3D or 4D input, got {stack.ndim}D')
         if stack.size == 0 or stack.shape[0] == 0:
             raise ValueError('Stack processing requires a nonempty input stack')
-        if n_workers == 1:
-            return np.asarray([self.get_filtered(steps, in_array=sl) for sl in stack])
-        # imap consumes stack slices lazily instead of materializing a list of
-        # (slice, pipeline) tasks. It also preserves the original slice order.
-        worker = partial(_filter_slice, filters=steps)
-        if backend == 'threading':
-            with ThreadPoolExecutor(max_workers=int(n_workers)) as executor:
-                return np.asarray(list(executor.map(worker, stack)))
-        # CLAHE uses OpenCV, whose native thread state can be unsafe to
-        # inherit with fork after CLAHE has run in the parent process.
-        # Spawn fresh workers for this pipeline and disable nested OpenCV
-        # parallelism inside each worker; do not alter parent thread settings.
-        if any(name == 'clahe' for name, _ in steps):
-            with get_context('spawn').Pool(
-                    processes=int(n_workers), initializer=_init_opencv_worker) as pool:
-                return np.asarray(list(pool.imap(worker, stack, chunksize=1)))
-        with Pool(processes=int(n_workers)) as pool:
-            return np.asarray(list(pool.imap(worker, stack, chunksize=1)))
+        if not isinstance(progress, (bool, np.bool_)):
+            raise TypeError(f'progress must be a boolean, got {progress!r}')
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError('progress_callback must be callable or None')
+
+        from tqdm.auto import tqdm
+
+        with (tqdm(total=stack.shape[0], desc='Filtering', unit='slice')
+              if progress and progress_callback is None else nullcontext()) as bar:
+            def completed_slices(results):
+                for result in results:
+                    if progress_callback is not None:
+                        progress_callback(1)
+                    elif bar is not None:
+                        bar.update(1)
+                    yield result
+
+            if n_workers == 1:
+                results = (self.get_filtered(steps, in_array=sl) for sl in stack)
+                return np.asarray(list(completed_slices(results)))
+
+            worker = partial(_filter_slice, filters=steps)
+            if backend == 'threading':
+                with ThreadPoolExecutor(max_workers=int(n_workers)) as executor:
+                    return np.asarray(list(completed_slices(executor.map(worker, stack))))
+
+            # CLAHE uses OpenCV, whose native thread state can be unsafe to
+            # inherit with fork after CLAHE has run in the parent process.
+            if any(name == 'clahe' for name, _ in steps):
+                with get_context('spawn').Pool(
+                        processes=int(n_workers), initializer=_init_opencv_worker) as pool:
+                    return np.asarray(list(completed_slices(pool.imap(worker, stack, chunksize=1))))
+
+            with Pool(processes=int(n_workers)) as pool:
+                return np.asarray(list(completed_slices(pool.imap(worker, stack, chunksize=1))))
 
     @classmethod
     def get_available_filter_names(cls) -> list[str]:

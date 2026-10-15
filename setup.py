@@ -84,6 +84,7 @@ setup(
         'h5py',
         'tifffile',
         'scipy',
-        'scikit-image'
+        'scikit-image',
+        'tqdm'
     ]
 )

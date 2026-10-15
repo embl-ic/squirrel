@@ -252,3 +252,23 @@ sampled_median = [['median', {
 ```
 
 For repeatable scientific workflows, record the pipeline parameters, source dtype, output dtype, and the squirrel version used.
+
+### Stack filtering progress
+
+`ImageFilter.get_filtered_stack(..., progress=True)` displays a `tqdm` progress bar
+with the number of completed slices, elapsed time, processing rate, and estimated
+remaining time. This works for serial, threading, and multiprocessing backends.
+Use `progress=False` to suppress the bar (for example, in automated scripts).
+Progress is updated in the main process as results are consumed in slice order.
+
+The file-based stack workflow `squirrel.workflows.volume.filter_2d_workflow`
+also accepts `progress=True` by default. Batched runs display one continuous
+slice-level bar across all batches, rather than a separate bar per batch.
+`verbose=True` additionally prints stack configuration, batch operations, and
+output-writing messages. The progress bar reports filtering, not writing time.
+
+```python
+filtered = ImageFilter(stack).get_filtered_stack(
+    pipeline, n_workers=4, backend='threading', progress=True
+)
+```

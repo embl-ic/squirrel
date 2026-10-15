@@ -549,8 +549,12 @@ def filter_2d_workflow(
         filters=None,
         batch_size=None,
         n_workers=1,
-        verbose=False
+        verbose=False,
+        progress=True
 ):
+    if not isinstance(progress, (bool, np.bool_)):
+        raise TypeError(f'progress must be a boolean, got {progress!r}')
+
     if verbose:
         print(f'input_path = {input_path}')
         print(f'out_path = {out_path}')
@@ -559,6 +563,7 @@ def filter_2d_workflow(
         print(f'filters = {filters}')
         print(f'batch_size = {batch_size}')
         print(f'n_workers = {n_workers}')
+        print(f'progress = {progress}')
 
     from squirrel.library.filters import ImageFilter
     ImageFilter.validate_pipeline(filters)
@@ -580,65 +585,82 @@ def filter_2d_workflow(
     if stack_shape[0] < 1:
         raise ValueError('Cannot filter an empty stack')
 
+    if verbose:
+        print(f'Filtering stack with shape {stack_shape}, workers={n_workers}, batch_size={batch_size}')
+
     if batch_size is None:
 
         imf = ImageFilter(stack_handle[:])
-        filtered_stack = imf.get_filtered_stack(filters, n_workers=n_workers)
+        filtered_stack = imf.get_filtered_stack(filters, n_workers=n_workers, progress=progress)
+        if verbose:
+            print(f'Writing filtered stack to {out_path} ...')
         write_stack(out_path, filtered_stack, key=out_key)
+        if verbose:
+            print('Filtering complete')
         return
 
-    # Filter the first batch before creating the output container: the pipeline
-    # may change dtype via casting, normalization, or arithmetic modes.
-    first_batch = ImageFilter(stack_handle[:min(batch_size, stack_shape[0])]).get_filtered_stack(
-        filters, n_workers=n_workers
-    )
-    output_dtype = first_batch.dtype
-    if out_filetype == 'ome_zarr':
-        if verbose:
-            print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {output_dtype}')
-        from squirrel.library.ome_zarr import OMEZarrStore
-        oz = OMEZarrStore.create(
-            path=out_path,
-            shape=stack_shape,
-            dtype=output_dtype,
-            chunks=(max(1, min(int(batch_size / 4), 128)), 256, 256),
-            downsample_factors=(2, 2),
-            shards=None,
-            overwrite=False
+    from tqdm.auto import tqdm
+    progress_bar = tqdm(total=stack_shape[0], desc='Filtering', unit='slice', disable=not progress)
+
+    try:
+        # Filter the first batch before creating the output container: the pipeline
+        # may change dtype via casting, normalization, or arithmetic modes.
+        first_batch = ImageFilter(stack_handle[:min(batch_size, stack_shape[0])]).get_filtered_stack(
+            filters, n_workers=n_workers, progress=False, progress_callback=progress_bar.update
         )
-
-    def _write_batch(batch, id_offset, out_path):
-        out_filetype = get_filetype(out_path)
-        if out_filetype == 'dir':
-            from squirrel.library.io import write_tif_stack
-            write_tif_stack(batch, out_path, id_offset=id_offset, slice_name='slice_{:05d}.tif')
-            return
+        output_dtype = first_batch.dtype
         if out_filetype == 'ome_zarr':
-            oz.write(
-                0, [id_offset, 0, 0],
-                data=batch,
-                update_pyramid=True,
-                check_pyramid_alignment=True,
-                require_empty=True
+            if verbose:
+                print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {output_dtype}')
+            from squirrel.library.ome_zarr import OMEZarrStore
+            oz = OMEZarrStore.create(
+                path=out_path,
+                shape=stack_shape,
+                dtype=output_dtype,
+                chunks=(max(1, min(int(batch_size / 4), 128)), 256, 256),
+                downsample_factors=(2, 2),
+                shards=None,
+                overwrite=False
             )
-            return
-        raise ValueError(f'Invalid output type = {out_filetype}')
+
+        def _write_batch(batch, id_offset, out_path):
+            out_filetype = get_filetype(out_path)
+            if out_filetype == 'dir':
+                from squirrel.library.io import write_tif_stack
+                write_tif_stack(batch, out_path, id_offset=id_offset, slice_name='slice_{:05d}.tif')
+                return
+            if out_filetype == 'ome_zarr':
+                oz.write(
+                    0, [id_offset, 0, 0],
+                    data=batch,
+                    update_pyramid=True,
+                    check_pyramid_alignment=True,
+                    require_empty=True
+                )
+                return
+            raise ValueError(f'Invalid output type = {out_filetype}')
         
-    for zidx in range(0, stack_shape[0], batch_size):
+        for zidx in range(0, stack_shape[0], batch_size):
+
+            if verbose:
+                print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
+            if zidx == 0:
+                filtered_substack = first_batch
+            else:
+                imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
+                filtered_substack = imf.get_filtered_stack(
+                    filters, n_workers=n_workers, progress=False, progress_callback=progress_bar.update)
+                if filtered_substack.dtype != output_dtype:
+                    raise TypeError(f'Filter output dtype changed between batches: '
+                                    f'{output_dtype} -> {filtered_substack.dtype}')
+            if verbose:
+                print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
+            _write_batch(filtered_substack, zidx, out_path)
 
         if verbose:
-            print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
-        if zidx == 0:
-            filtered_substack = first_batch
-        else:
-            imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
-            filtered_substack = imf.get_filtered_stack(filters, n_workers=n_workers)
-            if filtered_substack.dtype != output_dtype:
-                raise TypeError(f'Filter output dtype changed between batches: '
-                                f'{output_dtype} -> {filtered_substack.dtype}')
-        if verbose:
-            print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
-        _write_batch(filtered_substack, zidx, out_path)
+            print('Filtering complete')
+    finally:
+        progress_bar.close()
 
 
 if __name__ == '__main__':

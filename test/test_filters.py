@@ -130,8 +130,15 @@ class TestImageFilter(unittest.TestCase):
         print('Testing zero mask exclusion from normalization ...')
         from squirrel.library.filters import ImageFilter
         img = np.array([0., 10., 20.])
-        result = ImageFilter(img).get_filtered([['same', dict(keep_zeros=True, normalize=True)]])
+        result = ImageFilter(img).get_filtered([
+            ['same', dict(keep_zeros=True, ignore_zeros=True, normalize=True)]
+        ])
         np.testing.assert_allclose(result, [0, 0, 1])
+
+        included = ImageFilter(img).get_filtered([
+            ['same', dict(keep_zeros=True, ignore_zeros=False, normalize=True)]
+        ])
+        np.testing.assert_allclose(included, [0, 0.5, 1])
 
     def test_subtract_preserves_sign(self):
         print('Testing signed arithmetic in subtract mode ...')

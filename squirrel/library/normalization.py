@@ -109,6 +109,37 @@ def apply_quantiles(image, quantiles=(0.1, 0.9), anchors=(0.2, 0.8), dilate_back
                            keep_zeros=keep_zeros, output_dtype='uint8')
 
 
+def _process_stack_slices(stack, image_function, image_args=(), z_range=None, n_workers=1, opencv=False):
+    """Apply an image function to selected slices in serial or process workers."""
+    from squirrel.library.data import norm_z_range
+
+    start, stop = norm_z_range(z_range, stack.shape[0])
+    if not isinstance(n_workers, int) or n_workers < 1:
+        raise ValueError('n_workers must be a positive integer')
+    if n_workers == 1:
+        return np.asarray([image_function(stack[idx], *image_args) for idx in range(start, stop)])
+
+    from multiprocessing import Pool, get_context
+
+    print(f'Running with {n_workers} CPUs')
+    if opencv:
+        pool_factory = get_context('spawn').Pool
+        pool_kwargs = {'initializer': _init_opencv_worker}
+    else:
+        pool_factory = Pool
+        pool_kwargs = {}
+
+    with pool_factory(processes=n_workers, **pool_kwargs) as pool:
+        tasks = (pool.apply_async(image_function, (stack[idx], *image_args)) for idx in range(start, stop))
+        return np.asarray([task.get() for task in tasks])
+
+
+def _init_opencv_worker():
+    """Prevent nested OpenCV threading in spawned CLAHE workers."""
+    import cv2
+    cv2.setNumThreads(1)
+
+
 def normalize_slices(
         stack,
         dilate_background=0,
@@ -122,30 +153,8 @@ def normalize_slices(
     # assert stack.dtype == 'uint8', f'Normalization only implemented for uint8 data, found {stack.dtype}'
     if stack.dtype != 'uint8':
         print('Warning: Normalization will convert the dtype to uint8! ')
-
-    from squirrel.library.data import norm_z_range
-    stack_shape = stack.shape
-    z_range = norm_z_range(z_range, stack_shape[0])
-
-    if n_workers == 1:
-
-        result_stack = []
-        for idx in range(*z_range):
-            img = stack[idx]
-            result_stack.append(apply_quantiles(img, quantiles, anchors, dilate_background, keep_zeros))
-
-    else:
-        print(f'Running with {n_workers} CPUs')
-        from multiprocessing import Pool
-
-        with Pool(processes=n_workers) as p:
-            tasks = []
-            for idx in range(*z_range):
-                img = stack[idx]
-                tasks.append(p.apply_async(apply_quantiles, (img, quantiles, anchors, dilate_background, keep_zeros)))
-            result_stack = [task.get() for task in tasks]
-
-    return np.array(result_stack)
+    return _process_stack_slices(stack, apply_quantiles,
+                                 (quantiles, anchors, dilate_background, keep_zeros), z_range, n_workers)
 
 
 def _adjust_greyscale_in_image(img, greys_in=None, greys_out=None, cast_dtype='uint8'):
@@ -177,29 +186,8 @@ def adjust_greyscale(
         n_workers=1
 ):
 
-    from squirrel.library.data import norm_z_range
-    stack_shape = stack.shape
-    z_range = norm_z_range(z_range, stack_shape[0])
-
-    if n_workers == 1:
-
-        result_stack = []
-        for idx in range(*z_range):
-            img = stack[idx]
-            result_stack.append(_adjust_greyscale_in_image(img, greys_in, greys_out, cast_dtype))
-
-    else:
-        print(f'Running with {n_workers} CPUs')
-        from multiprocessing import Pool
-
-        with Pool(processes=n_workers) as p:
-            tasks = []
-            for idx in range(*z_range):
-                img = stack[idx]
-                tasks.append(p.apply_async(_adjust_greyscale_in_image, (img, greys_in, greys_out, cast_dtype)))
-            result_stack = [task.get() for task in tasks]
-
-    return np.array(result_stack)
+    return _process_stack_slices(stack, _adjust_greyscale_in_image,
+                                 (greys_in, greys_out, cast_dtype), z_range, n_workers)
 
 
 def clahe_on_image(
@@ -265,42 +253,9 @@ def clahe_on_slices(
         n_workers=1
 ):
 
-    from squirrel.library.data import norm_z_range
-    stack_shape = stack.shape
-    z_range = norm_z_range(z_range, stack_shape[0])
-
-    if n_workers == 1:
-
-        result_stack = []
-        for idx in range(*z_range):
-            img = stack[idx]
-            result_stack.append(
-                clahe_on_image(
-                    img, clip_limit, tile_grid_size,
-                    cast_dtype, invert_output, gaussian_sigma, auto_mask, background_to_mean, tile_grid_in_pixels
-                )
-            )
-
-    else:
-        print(f'Running with {n_workers} CPUs')
-        from multiprocessing import Pool
-
-        with Pool(processes=n_workers) as p:
-            tasks = []
-            for idx in range(*z_range):
-                img = stack[idx]
-                tasks.append(
-                    p.apply_async(
-                        clahe_on_image, (
-                            img, clip_limit, tile_grid_size,
-                            cast_dtype, invert_output, gaussian_sigma, auto_mask, background_to_mean,
-                            tile_grid_in_pixels
-                        )
-                    )
-                )
-            result_stack = [task.get() for task in tasks]
-
-    return np.array(result_stack)
+    image_args = (clip_limit, tile_grid_size, cast_dtype, invert_output, gaussian_sigma,
+                  auto_mask, background_to_mean, tile_grid_in_pixels)
+    return _process_stack_slices(stack, clahe_on_image, image_args, z_range, n_workers, opencv=True)
 
 
 if __name__ == '__main__':

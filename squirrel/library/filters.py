@@ -67,7 +67,7 @@ def fft_highpass(image: np.ndarray, sigma=(10, 10)) -> np.ndarray:
 
 def _validate_boolean_options(parameters, prefix=''):
     """Validate common boolean options without coercing truthy values."""
-    for name in ('normalize', 'keep_zeros', 'zeros_to_mean'):
+    for name in ('normalize', 'keep_zeros', 'ignore_zeros', 'zeros_to_mean'):
         if name in parameters and not isinstance(parameters[name], (bool, np.bool_)):
             raise TypeError(f'{prefix}{name} must be a boolean, got {parameters[name]!r}')
 
@@ -78,7 +78,7 @@ def filter_wrapper(func):
     The wrapped callable accepts ``filter_mode`` (apply/add/subtract),
     ``clip``, ``normalize``, ``normalization_range``, ``cast_dtype``,
     ``normalization_method``, ``quantiles``, ``anchors``,
-    ``keep_zeros``, and ``zeros_to_mean`` in addition to filter-specific
+    ``keep_zeros``, ``ignore_zeros``, and ``zeros_to_mean`` in addition to filter-specific
     arguments. The result retains the input shape; invalid options raise
     ``TypeError`` or ``ValueError``.
     """
@@ -87,9 +87,9 @@ def filter_wrapper(func):
                 normalize=False, normalization_range=None, cast_dtype=None,
                 normalization_method='minmax', quantiles=(0.01, 0.99),
                 anchors=(0.0, 1.0),
-                keep_zeros=False, zeros_to_mean=False, **kwargs):
+                keep_zeros=False, ignore_zeros=False, zeros_to_mean=False, **kwargs):
         _validate_boolean_options(dict(normalize=normalize, keep_zeros=keep_zeros,
-                                       zeros_to_mean=zeros_to_mean))
+                                       ignore_zeros=ignore_zeros, zeros_to_mean=zeros_to_mean))
         if not isinstance(filter_mode, str):
             raise TypeError(f'filter_mode must be a string, got {filter_mode!r}')
         if filter_mode not in ('apply', 'add', 'subtract'):
@@ -158,7 +158,7 @@ def filter_wrapper(func):
             result = normalize_image(
                 result, method=normalization_method, quantiles=quantiles,
                 normalization_range=normalization_range, anchors=anchors,
-                output_dtype=target_dtype, mask=~zero_mask if zero_mask is not None else None)
+                output_dtype=target_dtype, ignore_zeros=ignore_zeros)
         elif dtype is not None:
             result = _safe_cast(result, dtype)
         if zero_mask is not None:

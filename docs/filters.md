@@ -55,10 +55,13 @@ Every filter accepts the following options in its parameter dictionary, in addit
 | --- | --- | --- |
 | `filter_mode` | `'apply'` | `'apply'` uses the filter output; `'add'` adds it to the original image; `'subtract'` subtracts it from the original image. |
 | `clip` | `None` | Optional `[minimum, maximum]` range applied after the filter/mode. |
-| `normalize` | `False` | Scale the result using its finite minimum/maximum, or `normalization_range` when supplied. |
+| `normalize` | `False` | Normalize the filtered result after filtering, `filter_mode`, and `clip`. |
+| `normalization_method` | `'minmax'` | Choose `'minmax'` or `'quantile'` to estimate input intensity limits. |
+| `quantiles` | `(0.01, 0.99)` | Lower and upper quantile fractions for `'quantile'` normalization. |
+| `anchors` | `(0.0, 1.0)` | Fractions of the output intensity range to which the input limits are mapped. |
 | `normalization_range` | `None` | Optional `[minimum, maximum]` range; requires `normalize=True`. |
 | `cast_dtype` | `None` | Explicit destination NumPy dtype, e.g. `'uint16'` or `'float32'`. |
-| `keep_zeros` | `False` | Restore originally zero-valued pixels to zero in the final output. |
+| `keep_zeros` | `False` | Exclude originally zero-valued pixels when estimating limits and restore them to zero after processing. |
 | `zeros_to_mean` | `False` | Replace zero-valued input pixels with the mean of nonzero pixels *before* filtering. |
 
 Normalization without `cast_dtype` produces `float32` values scaled to `[0, 1]`. With an integer `cast_dtype`, normalized values span that dtype's representable range. Without normalization or explicit casting, the filter's native result dtype is retained; it may differ from the input dtype. Integer casting clips out-of-range values rather than wrapping. Constant-valued data normalized without an explicit range produces zeros.
@@ -77,6 +80,55 @@ pipeline = [
 ```
 
 `keep_zeros` and `zeros_to_mean` have different purposes and may be combined.
+
+`normalization_range` overrides automatic limit estimation, irrespective of `normalization_method`. Quantiles and anchors must each be strictly increasing pairs in `[0, 1]`. Nondefault normalization options require `normalize=True`. Normalization is performed **per image**; `get_filtered_stack` therefore estimates separate limits for each slice. A constant image or an image with no eligible pixels produces zeros when limits are estimated automatically.
+
+### Quantile normalization examples
+
+For direct filter calls, quantiles specify which input intensities are mapped to the output anchors:
+
+```python
+from squirrel.library.filters import ImageFilter
+
+result = ImageFilter.same(
+    image, normalize=True, normalization_method='quantile',
+    quantiles=(0.01, 0.99), anchors=(0.0, 1.0), cast_dtype='uint16'
+)
+```
+
+The same options work in JSON-compatible pipelines:
+
+```python
+pipeline = [
+    ['gaussian', {
+        'sigma': 1.5, 'normalize': True,
+        'normalization_method': 'quantile',
+        'quantiles': [0.05, 0.95],
+        'anchors': [0.1, 0.9],
+        'cast_dtype': 'uint8',
+    }],
+]
+```
+
+Here, the 5th and 95th percentiles are mapped to approximately 10% and 90% of the `uint8` range, respectively; values beyond those limits are clipped to the destination dtype range. Anchors `(0.0, 1.0)` map the chosen limits to the full range.
+
+### Shared normalization helpers
+
+`get_normalization_limits(image, method='minmax', quantiles=(0.01, 0.99), mask=None, ignore_zeros=False)` estimates a `(low, high)` pair from finite pixels, returning `None` for an empty or constant selection. `mask` is a boolean array matching the image shape and **only controls which pixels are used to estimate limits**. `ignore_zeros=True` also excludes zeros from estimation.
+
+`normalize_image(image, method='minmax', quantiles=(0.01, 0.99), normalization_range=None, anchors=(0.0, 1.0), output_dtype='float32', mask=None, ignore_zeros=False, keep_zeros=False)` uses those limits for linear rescaling. Unlike `ignore_zeros`, `keep_zeros` also forces originally zero-valued pixels to zero in the result. For integer output, the full representable dtype range is used; floating output uses `[0, 1]`.
+
+```python
+from squirrel.library.normalization import normalize_image
+
+normalized = normalize_image(
+    image, method='quantile', quantiles=(0.01, 0.99),
+    ignore_zeros=True, keep_zeros=True, output_dtype='uint8'
+)
+```
+
+Legacy functions such as `norm_full_range`, `apply_quantiles`, and `normalize_slices` remain available. They retain their application-specific defaults, so their outputs need not match a bare `normalize_image()` call. CLAHE is a separate local contrast enhancement operation, not a quantile normalization method.
+
 
 ## Images, intermediate results, and stacks
 

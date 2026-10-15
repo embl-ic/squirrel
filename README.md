@@ -72,7 +72,7 @@ pip install pyvsnr
 
 ## Documentation
 
-- [Image filtering](docs/filters.md) — Filter reference, pipelines, normalization, stack processing, and parallel execution.
+- [Image filtering](docs/filters.md) — Filter reference, min–max and quantile normalization, pipelines, stack processing, and parallel execution.
 
 ## Usage
 

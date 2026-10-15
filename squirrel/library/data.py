@@ -18,84 +18,37 @@ def resolution_to_pixels(value, resolution):
 
 
 def norm_8bit(im, quantiles, ignore_zeros=False):
-    im = im.astype('float32')
-    if ignore_zeros:
-        upper = np.quantile(im[im > 0], quantiles[1])
-        lower = np.quantile(im[im > 0], quantiles[0])
-    else:
-        upper = np.quantile(im, quantiles[1])
-        lower = np.quantile(im, quantiles[0])
-    im -= lower
-    im /= (upper - lower)
-    im *= 255
-    im[im > 255] = 255
-    im[im < 0] = 0
-    return im.astype('uint8')
+    """Normalize image quantiles to the uint8 range."""
+    from squirrel.library.normalization import normalize_image
+    return normalize_image(im, method='quantile', quantiles=quantiles,
+                           ignore_zeros=ignore_zeros, output_dtype='uint8')
 
 
 def get_contrast_limits(im, method='minmax'):
-    if method == 'minmax':
-        return im.min(), im.max()
+    """Return contrast limits, preserving the legacy unsupported-method result."""
+    if method != 'minmax':
+        return None
+    from squirrel.library.normalization import get_normalization_limits
+    limits = get_normalization_limits(im, method=method)
+    return limits if limits is not None else (im.min(), im.max())
 
 
 def norm_full_range(im, quantiles, anchors=None, ignore_zeros=False, mask=None, cast_8bit=False):
-
-    # mask = im > 0
-
-    is_zero = im < 0
-
-    dtype = im.dtype
-    max_val = np.iinfo(dtype).max
-    assert dtype == 'uint8' or dtype == 'uint16', \
-        f'Only allowing 8 or 16 bit unsigned integer images. Image has dtype = {dtype}'
-    im = im.astype('float32')
-
+    """Normalize unsigned image quantiles, optionally estimating inside a mask."""
+    from squirrel.library.normalization import normalize_image
+    im = np.asarray(im)
+    if im.dtype not in (np.dtype('uint8'), np.dtype('uint16')):
+        raise TypeError('norm_full_range requires uint8 or uint16 input')
     if anchors is None:
-        anchors = (quantiles[0], quantiles[1])
-    anchors = np.array(anchors) * max_val
-
-    if ignore_zeros and mask is None:
-        upper = np.quantile(im[im > 0], quantiles[1])
-        lower = np.quantile(im[im > 0], quantiles[0])
-    if not ignore_zeros and mask is None:
-        upper = np.quantile(im, quantiles[1])
-        lower = np.quantile(im, quantiles[0])
-    if ignore_zeros and mask is not None:
-        upper = np.quantile(im[np.logical_and(im > 0, mask)], quantiles[1])
-        lower = np.quantile(im[np.logical_and(im > 0, mask)], quantiles[0])
-    if not ignore_zeros and mask is not None:
-        # upper = np.quantile(im[mask], quantiles[1])
-        # lower = np.quantile(im[mask], quantiles[0])
-        masked_values = im.ravel()[np.flatnonzero(mask)]
-        upper = np.percentile(masked_values, quantiles[1] * 100)
-        lower = np.percentile(masked_values, quantiles[0] * 100)
-
-    im -= lower
-    im /= upper - lower
-    if dtype == 'uint8' or not cast_8bit:
-        im *= anchors[1] - anchors[0]
-        im += anchors[0]
-    else:
-        im *= (anchors[1] - anchors[0]) / (2 ** 16 - 1) * (2 ** 8 - 1)
-        print(f'(anchors[1] - anchors[0]) / 16 ** 2 * 8 ** 2 = {(anchors[1] - anchors[0]) / (2 ** 16 - 1) * (2 ** 8 - 1)}')
-        im += anchors[0] / (2 ** 16 - 1) * (2 ** 8 - 1)
-        print(f'max_val = {max_val}')
-        max_val = max_val / (2 ** 16 - 1) * (2 ** 8 - 1)
-        print(f'max_val = {max_val}')
-        dtype = 'uint8'
-
-    im[im > max_val] = max_val
-    im[im < 0] = 0
-
-    if ignore_zeros and mask is None:
-        im[is_zero] = 0
-    if not ignore_zeros and mask is None:
-        pass
-    if ignore_zeros and mask is not None:
-        im[np.logical_and(np.logical_not(mask), is_zero)] = 0
-    if not ignore_zeros and mask is not None:
-        im[np.logical_not(mask)] = 0
-    return im.astype(dtype)
+        anchors = quantiles
+    output_dtype = 'uint8' if cast_8bit else im.dtype
+    result = normalize_image(im, method='quantile', quantiles=quantiles,
+                             anchors=anchors, ignore_zeros=ignore_zeros,
+                             mask=mask, output_dtype=output_dtype)
+    if mask is not None and not ignore_zeros:
+        result = result.copy()
+        result[~np.asarray(mask, dtype=bool)] = 0
+    return result
 
 
 def norm_z_range(z_range, len_stack):

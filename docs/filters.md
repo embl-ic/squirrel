@@ -61,7 +61,8 @@ Every filter accepts the following options in its parameter dictionary, in addit
 | `anchors` | `(0.0, 1.0)` | Fractions of the output intensity range to which the input limits are mapped. |
 | `normalization_range` | `None` | Optional `[minimum, maximum]` range; requires `normalize=True`. |
 | `cast_dtype` | `None` | Explicit destination NumPy dtype, e.g. `'uint16'` or `'float32'`. |
-| `keep_zeros` | `False` | Exclude originally zero-valued pixels when estimating limits and restore them to zero after processing. |
+| `keep_zeros` | `False` | Restore originally zero-valued pixels to zero after processing; does not affect normalization statistics. |
+| `ignore_zeros` | `False` | Exclude zero-valued pixels in the filtered result from automatic normalization limit estimation; does not preserve zeros in the output. |
 | `zeros_to_mean` | `False` | Replace zero-valued input pixels with the mean of nonzero pixels *before* filtering. |
 
 Normalization without `cast_dtype` produces `float32` values scaled to `[0, 1]`. With an integer `cast_dtype`, normalized values span that dtype's representable range. Without normalization or explicit casting, the filter's native result dtype is retained; it may differ from the input dtype. Integer casting clips out-of-range values rather than wrapping. Constant-valued data normalized without an explicit range produces zeros.
@@ -79,7 +80,25 @@ pipeline = [
 ]
 ```
 
-`keep_zeros` and `zeros_to_mean` have different purposes and may be combined.
+`keep_zeros`, `ignore_zeros`, and `zeros_to_mean` have different purposes and may be combined. `keep_zeros` restores the input image's zero pixels after filtering; `ignore_zeros` excludes zero-valued pixels in the result being normalized from automatic limit estimation. Neither option implies the other. With `keep_zeros=True, ignore_zeros=False`, zeros **are included** in the statistics (unless an explicit normalization range is supplied). With `keep_zeros=True, ignore_zeros=True`, zero-valued pixels are excluded from estimation and original zeros are restored. `ignore_zeros` does not affect a user-supplied `normalization_range`.
+
+For background-masked images, an explicit combination is recommended:
+
+```python
+pipeline = [
+    ['same', {
+        'normalize': True,
+        'normalization_method': 'quantile',
+        'quantiles': [0.05, 0.95],
+        'anchors': [0.1, 0.9],
+        'cast_dtype': 'uint8',
+        'keep_zeros': True,
+        'ignore_zeros': True,
+    }],
+]
+```
+
+This is a behavior change for pipelines previously using `keep_zeros=True` alone: zero pixels now contribute to automatic normalization statistics unless `ignore_zeros=True` is also set.
 
 `normalization_range` overrides automatic limit estimation, irrespective of `normalization_method`. Quantiles and anchors must each be strictly increasing pairs in `[0, 1]`. Nondefault normalization options require `normalize=True`. Normalization is performed **per image**; `get_filtered_stack` therefore estimates separate limits for each slice. A constant image or an image with no eligible pixels produces zeros when limits are estimated automatically.
 

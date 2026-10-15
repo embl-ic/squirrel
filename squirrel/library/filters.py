@@ -128,7 +128,12 @@ def filter_wrapper(func):
         if zeros_to_mean:
             nonzero = original != 0
             if np.any(nonzero):
-                prepared = np.where(nonzero, original, original[nonzero].mean())
+                mean_value = original[nonzero].mean()
+
+                if np.issubdtype(original.dtype, np.integer):
+                    mean_value = np.asarray(mean_value).astype(original.dtype)[()]
+
+                prepared = np.where(nonzero, original, mean_value)
             else:
                 prepared = original.copy()
         else:

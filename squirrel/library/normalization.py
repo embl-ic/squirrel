@@ -201,6 +201,16 @@ def clahe_on_image(
         background_to_mean=False,
         tile_grid_in_pixels=False
 ):
+    image = np.asarray(image)
+    if image.ndim != 2 or image.dtype not in (np.dtype('uint8'), np.dtype('uint16')):
+        raise ValueError(
+            'CLAHE requires a 2D uint8 or uint16 image; '
+            f'got shape {image.shape} and dtype {image.dtype}. '
+            'Normalize and cast the image before CLAHE, for example with '
+            'ImageFilter.same(image, normalize=True, '
+            'normalization_method="quantile", cast_dtype="uint8").'
+        )
+
     if tile_grid_in_pixels:
         tile_grid_size = (np.array(image.shape) / np.array(tile_grid_size)).astype(int).tolist()
 

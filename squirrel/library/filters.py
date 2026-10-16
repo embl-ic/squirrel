@@ -50,6 +50,30 @@ def _safe_cast(array, dtype):
     return array.astype(dtype)
 
 
+def _rescale_integer_dtype(array, target_dtype):
+    """Map the full uint8/uint16 range to the target dtype range."""
+    array = np.asarray(array)
+    source_dtype = array.dtype
+    target_dtype = np.dtype(target_dtype)
+    supported = (np.dtype('uint8'), np.dtype('uint16'))
+    if source_dtype not in supported or target_dtype not in supported:
+        raise TypeError(
+            f'rescale_dtype supports only uint8 and uint16 input/output; '
+            f'got input {source_dtype} and output {target_dtype}. '
+            'Convert the input to uint8 or uint16 first, or use '
+            'normalize=True with cast_dtype for data-dependent normalization.')
+
+    if source_dtype == target_dtype:
+        return array.copy()
+
+    source_max = np.iinfo(source_dtype).max
+    target_max = np.iinfo(target_dtype).max
+    # Integer arithmetic gives deterministic round-to-nearest for both
+    # directions without float32 precision loss or per-image statistics.
+    scaled = (array.astype(np.uint64) * target_max + source_max // 2) // source_max
+    return scaled.astype(target_dtype)
+
+
 def fft_highpass(image: np.ndarray, sigma=(10, 10)) -> np.ndarray:
     """FFT Gaussian high-pass on a 2D periodic image; sigma is (y, x)."""
     image = np.asarray(image)
@@ -78,6 +102,7 @@ def filter_wrapper(func):
 
     The wrapped callable accepts ``filter_mode`` (apply/add/subtract),
     ``clip``, ``normalize``, ``normalization_range``, ``cast_dtype``,
+    ``rescale_dtype``,
     ``normalization_method``, ``quantiles``, ``anchors``,
     ``keep_zeros``, ``ignore_zeros``, and ``zeros_to_mean`` in addition to filter-specific
     arguments. The result retains the input shape; invalid options raise
@@ -86,9 +111,20 @@ def filter_wrapper(func):
     @wraps(func)
     def wrapper(in_array: np.ndarray, *args, filter_mode='apply', clip=None,
                 normalize=False, normalization_range=None, cast_dtype=None,
+                 rescale_dtype=None,
                 normalization_method='minmax', quantiles=(0.01, 0.99),
                 anchors=(0.0, 1.0),
                 keep_zeros=False, ignore_zeros=False, zeros_to_mean=False, **kwargs):
+        if rescale_dtype is not None:
+            if normalize:
+                raise ValueError('rescale_dtype cannot be used with normalize=True; '
+                                 'remove normalize=True or remove rescale_dtype.')
+            if cast_dtype is not None:
+                raise ValueError('rescale_dtype cannot be used with cast_dtype; '
+                                 'remove cast_dtype and keep rescale_dtype, or vice versa.')
+            if np.dtype(rescale_dtype) not in (np.dtype('uint8'), np.dtype('uint16')):
+                raise TypeError(f'rescale_dtype must be uint8 or uint16, got {rescale_dtype!r}; '
+                                'choose rescale_dtype="uint8" or "uint16".')
         _validate_boolean_options(dict(normalize=normalize, keep_zeros=keep_zeros,
                                        ignore_zeros=ignore_zeros, zeros_to_mean=zeros_to_mean))
         if not isinstance(filter_mode, str):
@@ -154,7 +190,9 @@ def filter_wrapper(func):
         if clip is not None:
             result = np.clip(result, *clip)
         dtype = np.dtype(cast_dtype) if cast_dtype is not None else None
-        if normalize:
+        if rescale_dtype is not None:
+            result = _rescale_integer_dtype(result, rescale_dtype)
+        elif normalize:
             target_dtype = dtype if dtype is not None else np.dtype('float32')
             result = normalize_image(
                 result, method=normalization_method, quantiles=quantiles,
@@ -271,6 +309,22 @@ class ImageFilter:
                         _validate_range(parameters[key], key)
                     except (ValueError, TypeError) as exc:
                         raise type(exc)(f'{prefix} ({name!r}): {exc}') from exc
+            rescale_dtype = parameters.get('rescale_dtype')
+            if rescale_dtype is not None:
+                if parameters.get('normalize', False):
+                    raise ValueError(f'{prefix} ({name!r}): rescale_dtype cannot be used with '
+                                     'normalize=True; remove normalize=True or rescale_dtype.')
+                if parameters.get('cast_dtype') is not None:
+                    raise ValueError(f'{prefix} ({name!r}): rescale_dtype cannot be used with '
+                                     'cast_dtype; remove one of these options.')
+                try:
+                    target_dtype = np.dtype(rescale_dtype)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f'{prefix} ({name!r}): invalid rescale_dtype {rescale_dtype!r}; '
+                                     'choose "uint8" or "uint16".') from exc
+                if target_dtype not in (np.dtype('uint8'), np.dtype('uint16')):
+                    raise TypeError(f'{prefix} ({name!r}): rescale_dtype must be uint8 or uint16, '
+                                    f'got {rescale_dtype!r}; choose "uint8" or "uint16".')
             if parameters.get('cast_dtype') is not None:
                 try:
                     np.dtype(parameters['cast_dtype'])

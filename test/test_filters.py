@@ -888,3 +888,49 @@ class TestFilterMultiprocessing(unittest.TestCase):
             for label in list(timings)[1:]:
                 print(f'    Speedup ({label}): {baseline / timings[label]:.2f}x')
         # No performance assertions: execution times are hardware-dependent.
+
+
+class TestRescaleDtype(unittest.TestCase):
+
+    def setUp(self):
+        import warnings
+        warnings.simplefilter('ignore', category=Warning)
+        from squirrel.library.filters import ImageFilter
+        self.ImageFilter = ImageFilter
+
+    def test_rescale_dtype_fixed_uint16_to_uint8(self):
+        print('Testing rescale_dtype: fixed full-range mapping uint16 to uint8')
+        image = np.array([[0, 1000, 32768, 65535]], dtype=np.uint16)
+        result = self.ImageFilter(image).get_filtered([['same', {'rescale_dtype': 'uint8'}]])
+        expected = np.array([[0, 4, 128, 255]], dtype=np.uint8)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_rescale_dtype_fixed_uint8_to_uint16(self):
+        print('Testing rescale_dtype: fixed full-range mapping uint8 to uint16')
+        image = np.array([[0, 1, 128, 255]], dtype=np.uint8)
+        result = self.ImageFilter(image).get_filtered([['same', {'rescale_dtype': 'uint16'}]])
+        np.testing.assert_array_equal(result, image.astype(np.uint16) * 257)
+
+    def test_rescale_dtype_independent_of_slice_range(self):
+        print('Testing rescale_dtype: same input intensity maps identically in different slices')
+        stack = np.array([[[0, 32768]], [[32768, 65535]]], dtype=np.uint16)
+        result = self.ImageFilter(stack).get_filtered_stack([['same', {'rescale_dtype': 'uint8'}]],
+                                                       progress=False)
+        self.assertEqual(result[0, 0, 1], result[1, 0, 0])
+        self.assertEqual(result[0, 0, 1], 128)
+
+    def test_rescale_dtype_rejects_conflicts_and_invalid_types(self):
+        print('Testing rescale_dtype: actionable errors for conflicting options and types')
+        image = np.array([[0, 65535]], dtype=np.uint16)
+        for params, expected in (
+                ({'rescale_dtype': 'uint8', 'normalize': True}, 'normalize=True'),
+                ({'rescale_dtype': 'uint8', 'cast_dtype': 'uint8'}, 'cast_dtype'),
+                ({'rescale_dtype': 'float32'}, 'uint8 or uint16')):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex((TypeError, ValueError), expected):
+                    self.ImageFilter(image).get_filtered([['same', params]])
+        for dtype in (np.float32, np.int16, np.uint32):
+            with self.subTest(dtype=dtype):
+                with self.assertRaisesRegex(TypeError, 'input/output'):
+                    self.ImageFilter(image.astype(dtype)).get_filtered(
+                        [['same', {'rescale_dtype': 'uint8'}]])

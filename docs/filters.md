@@ -61,11 +61,12 @@ Every filter accepts the following options in its parameter dictionary, in addit
 | `anchors` | `(0.0, 1.0)` | Fractions of the output intensity range to which the input limits are mapped. |
 | `normalization_range` | `None` | Optional `[minimum, maximum]` range; requires `normalize=True`. |
 | `cast_dtype` | `None` | Explicit destination NumPy dtype, e.g. `'uint16'` or `'float32'`. |
+| `rescale_dtype` | `None` | Rescale the full input dtype range to `uint8` or `uint16` without per-image statistics; requires `uint8` or `uint16` input and cannot be combined with `normalize=True` or `cast_dtype`. |
 | `keep_zeros` | `False` | Restore originally zero-valued pixels to zero after processing; does not affect normalization statistics. |
 | `ignore_zeros` | `False` | Exclude zero-valued pixels in the filtered result from automatic normalization limit estimation; does not preserve zeros in the output. |
 | `zeros_to_mean` | `False` | Replace zero-valued input pixels with the mean of nonzero pixels *before* filtering. |
 
-Normalization without `cast_dtype` produces `float32` values scaled to `[0, 1]`. With an integer `cast_dtype`, normalized values span that dtype's representable range. Without normalization or explicit casting, the filter's native result dtype is retained; it may differ from the input dtype. Integer casting clips out-of-range values rather than wrapping. Constant-valued data normalized without an explicit range produces zeros.
+Normalization without `cast_dtype` produces `float32` values scaled to `[0, 1]`. With an integer `cast_dtype`, normalized values span that dtype's representable range. Without normalization or explicit casting, the filter's native result dtype is retained; it may differ from the input dtype. Integer casting clips out-of-range values rather than wrapping. Constant-valued data normalized without an explicit range produces zeros. `rescale_dtype` is independent of normalization and cannot be combined with `normalize=True` or `cast_dtype`.
 
 Example: normalize and cast a high-pass result to unsigned 16-bit:
 
@@ -101,6 +102,41 @@ pipeline = [
 This is a behavior change for pipelines previously using `keep_zeros=True` alone: zero pixels now contribute to automatic normalization statistics unless `ignore_zeros=True` is also set.
 
 `normalization_range` overrides automatic limit estimation, irrespective of `normalization_method`. Quantiles and anchors must each be strictly increasing pairs in `[0, 1]`. Nondefault normalization options require `normalize=True`. Normalization is performed **per image**; `get_filtered_stack` therefore estimates separate limits for each slice. A constant image or an image with no eligible pixels produces zeros when limits are estimated automatically.
+
+### Fixed-range dtype rescaling (`rescale_dtype`)
+
+Use `rescale_dtype` to map the **full representable range** of a `uint8` or
+`uint16` image to the full range of the requested unsigned integer dtype.
+Unlike `normalize=True`, it does **not** use per-image minima, maxima, or
+quantiles, so the same input value maps to the same output value in every
+stack slice. It is useful as the last step of a 16-bit filtering pipeline:
+
+```python
+pipeline = [
+    ['gaussian', {'sigma': 0.75, 'cast_dtype': 'uint16'}],
+    ['same', {'rescale_dtype': 'uint8'}],
+]
+```
+
+The equivalent CLI filter argument is:
+
+```bash
+'["same", {"rescale_dtype": "uint8"}]'
+```
+
+For `uint16` to `uint8`, the mapping is `round(value * 255 / 65535)`:
+`0 → 0`, `65535 → 255`. The reverse `uint8` to `uint16` mapping uses
+`round(value * 65535 / 255)`; converting to the same dtype preserves values.
+Rounding is to the nearest integer. The mapping is **not** stretched to the
+observed pixel range: a slice with maximum 30000 will not be mapped to 255.
+
+Only `uint8` and `uint16` **input and output** dtypes are supported.
+`rescale_dtype` cannot be combined with `normalize=True` or with `cast_dtype`;
+invalid combinations raise errors describing the conflict and how to fix it.
+In particular, do not use `cast_dtype='uint8'` as a substitute: it clips
+16-bit values above 255 instead of rescaling them. If a preceding filter
+produces floating-point output, first explicitly convert it to `uint16`
+(e.g. with `cast_dtype='uint16'` on that preceding step) before rescaling.
 
 ### Quantile normalization examples
 

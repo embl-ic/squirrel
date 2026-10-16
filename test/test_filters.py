@@ -1007,3 +1007,45 @@ class TestSharedDtypeUtilities(unittest.TestCase):
 
         with self.assertRaisesRegex(TypeError, 'uint8 and uint16'):
             rescale_integer_dtype(np.array([1.0], dtype=np.float32), 'uint8')
+
+
+class TestSharedProcessingValidation(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_shared_validation_rejects_invalid_options(self):
+        print('Testing shared processing validation for direct calls and pipelines ...')
+        from squirrel.library.filters import ImageFilter
+
+        image = np.arange(4, dtype=np.uint8).reshape(2, 2)
+        cases = (
+            ({'filter_mode': 1}, TypeError, 'filter_mode'),
+            ({'filter_mode': 'multiply'}, ValueError, 'filter_mode'),
+            ({'clip': (2, 1)}, ValueError, 'clip'),
+            ({'normalization_range': (0, 1)}, ValueError, 'normalization_range'),
+            ({'normalization_method': 'quantile'}, ValueError, 'normalize=True'),
+            ({'normalize': True, 'quantiles': (0.9, 0.1)}, ValueError, 'quantiles'),
+            ({'normalize': True, 'anchors': (-1, 1)}, ValueError, 'anchors'),
+            ({'rescale_dtype': 'float32'}, TypeError, 'rescale_dtype'),
+            ({'rescale_dtype': 'invalid'}, ValueError, 'rescale_dtype'),
+            ({'rescale_dtype': 'uint8', 'normalize': True}, ValueError, 'normalize=True'),
+            ({'rescale_dtype': 'uint8', 'cast_dtype': 'uint8'}, ValueError, 'cast_dtype'),
+            ({'cast_dtype': 'invalid'}, ValueError, 'cast_dtype'),
+            ({'ignore_zeros': 1}, TypeError, 'ignore_zeros'),
+        )
+        for options, exception, message in cases:
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(exception, message):
+                    ImageFilter.validate_pipeline([['same', options]])
+                with self.assertRaisesRegex(exception, message):
+                    ImageFilter.same(image, **options)
+
+    def test_shared_validation_does_not_modify_parameters(self):
+        print('Testing shared processing validation preserves caller parameters ...')
+        from squirrel.library.filters import ImageFilter
+
+        options = {'clip': [0, 2], 'normalize': False}
+        ImageFilter.validate_pipeline([['same', options]])
+        self.assertEqual(options, {'clip': [0, 2], 'normalize': False})
+        np.testing.assert_array_equal(ImageFilter.same(np.array([0, 1, 3]), **options), [0, 1, 2])

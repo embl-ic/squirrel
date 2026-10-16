@@ -40,6 +40,63 @@ def _validate_boolean_options(parameters, prefix=''):
             raise TypeError(f'{prefix}{name} must be a boolean, got {parameters[name]!r}')
 
 
+
+def _validate_processing_options(parameters):
+    """Validate common image-independent options for direct and pipeline calls.
+
+    Return a copy with validated ranges, leaving caller parameters unchanged.
+    """
+    options = parameters.copy()
+    _validate_boolean_options(options)
+
+    mode = options.get('filter_mode', 'apply')
+    if not isinstance(mode, str):
+        raise TypeError(f'filter_mode must be a string, got {mode!r}')
+    if mode not in ('apply', 'add', 'subtract'):
+        raise ValueError(f'invalid filter_mode {mode!r}')
+
+    normalize = options.get('normalize', False)
+    if options.get('normalization_range') is not None and not normalize:
+        raise ValueError('normalization_range requires normalize=True')
+    for key in ('clip', 'normalization_range'):
+        if options.get(key) is not None:
+            options[key] = _validate_range(options[key], key)
+
+    method = options.get('normalization_method', 'minmax')
+    if method not in ('minmax', 'quantile'):
+        raise ValueError(f'Unknown normalization_method: {method!r}')
+    quantiles = options.get('quantiles', (0.01, 0.99))
+    anchors = options.get('anchors', (0.0, 1.0))
+    _validate_pair(quantiles, 'quantiles', unit=True)
+    _validate_pair(anchors, 'anchors', unit=True)
+    if not normalize and (method != 'minmax' or tuple(quantiles) != (0.01, 0.99) or
+                          tuple(anchors) != (0.0, 1.0)):
+        raise ValueError('normalization options require normalize=True')
+
+    rescale_dtype = options.get('rescale_dtype')
+    if rescale_dtype is not None:
+        if normalize:
+            raise ValueError('rescale_dtype cannot be used with normalize=True; '
+                             'remove normalize=True or rescale_dtype.')
+        if options.get('cast_dtype') is not None:
+            raise ValueError('rescale_dtype cannot be used with cast_dtype; remove one of these options.')
+        try:
+            target_dtype = np.dtype(rescale_dtype)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'invalid rescale_dtype {rescale_dtype!r}; '
+                             'choose "uint8" or "uint16".') from exc
+        if target_dtype not in (np.dtype('uint8'), np.dtype('uint16')):
+            raise TypeError(f'rescale_dtype must be uint8 or uint16, got {rescale_dtype!r}; '
+                            'choose "uint8" or "uint16".')
+
+    if options.get('cast_dtype') is not None:
+        try:
+            np.dtype(options['cast_dtype'])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'invalid cast_dtype: {exc}') from exc
+    return options
+
+
 def filter_wrapper(func):
     """Decorate an image filter with shared processing and validation options.
 
@@ -58,34 +115,17 @@ def filter_wrapper(func):
                 normalization_method='minmax', quantiles=(0.01, 0.99),
                 anchors=(0.0, 1.0),
                 keep_zeros=False, ignore_zeros=False, zeros_to_mean=False, **kwargs):
-        if rescale_dtype is not None:
-            if normalize:
-                raise ValueError('rescale_dtype cannot be used with normalize=True; '
-                                 'remove normalize=True or remove rescale_dtype.')
-            if cast_dtype is not None:
-                raise ValueError('rescale_dtype cannot be used with cast_dtype; '
-                                 'remove cast_dtype and keep rescale_dtype, or vice versa.')
-            if np.dtype(rescale_dtype) not in (np.dtype('uint8'), np.dtype('uint16')):
-                raise TypeError(f'rescale_dtype must be uint8 or uint16, got {rescale_dtype!r}; '
-                                'choose rescale_dtype="uint8" or "uint16".')
-        _validate_boolean_options(dict(normalize=normalize, keep_zeros=keep_zeros,
-                                       ignore_zeros=ignore_zeros, zeros_to_mean=zeros_to_mean))
-        if not isinstance(filter_mode, str):
-            raise TypeError(f'filter_mode must be a string, got {filter_mode!r}')
-        if filter_mode not in ('apply', 'add', 'subtract'):
-            raise ValueError(f'Unknown filter_mode: {filter_mode!r}')
-        clip = _validate_range(clip, 'clip')
-        if normalization_range is not None and not normalize:
-            raise ValueError('normalization_range requires normalize=True')
-        normalization_range = _validate_range(normalization_range, 'normalization_range')
-        if normalization_method not in ('minmax', 'quantile'):
-            raise ValueError(f'Unknown normalization_method: {normalization_method!r}')
-        _validate_pair(quantiles, 'quantiles', unit=True)
-        _validate_pair(anchors, 'anchors', unit=True)
-        if not normalize and (normalization_method != 'minmax' or
-                              tuple(quantiles) != (0.01, 0.99) or
-                              tuple(anchors) != (0.0, 1.0)):
-            raise ValueError('normalization options require normalize=True')
+        options = dict(filter_mode=filter_mode, clip=clip, normalize=normalize,
+                       normalization_range=normalization_range, cast_dtype=cast_dtype,
+                       rescale_dtype=rescale_dtype, normalization_method=normalization_method,
+                       quantiles=quantiles, anchors=anchors, keep_zeros=keep_zeros,
+                       ignore_zeros=ignore_zeros, zeros_to_mean=zeros_to_mean)
+        try:
+            validated_options = _validate_processing_options(options)
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"Filter {func.__name__!r}: {exc}") from exc
+        clip = validated_options['clip']
+        normalization_range = validated_options['normalization_range']
         # Apply the same image-independent, filter-specific checks to direct
         # calls as to JSON pipelines (including positional filter arguments).
         bound = inspect.signature(func).bind(in_array, *args, **kwargs)
@@ -225,54 +265,10 @@ class ImageFilter:
             except TypeError as exc:
                 raise ValueError(f'{prefix} ({name!r}): {exc}') from exc
 
-            _validate_boolean_options(parameters, prefix=f'{prefix} ({name!r}): ')
-            mode = parameters.get('filter_mode', 'apply')
-            if not isinstance(mode, str):
-                raise TypeError(f'{prefix} ({name!r}): filter_mode must be a string, got {mode!r}')
-            if mode not in ('apply', 'add', 'subtract'):
-                raise ValueError(f'{prefix} ({name!r}): invalid filter_mode {mode!r}')
-            if parameters.get('normalization_range') is not None and not parameters.get('normalize', False):
-                raise ValueError(f'{prefix} ({name!r}): normalization_range requires normalize=True')
             try:
-                normalization_method = parameters.get('normalization_method', 'minmax')
-                if normalization_method not in ('minmax', 'quantile'):
-                    raise ValueError(f'Unknown normalization_method: {normalization_method!r}')
-                _validate_pair(parameters.get('quantiles', (0.01, 0.99)), 'quantiles', unit=True)
-                _validate_pair(parameters.get('anchors', (0., 1.)), 'anchors', unit=True)
-                if not parameters.get('normalize', False) and (
-                    normalization_method != 'minmax' or
-                    tuple(parameters.get('quantiles', (0.01, 0.99))) != (0.01, 0.99) or
-                    tuple(parameters.get('anchors', (0., 1.))) != (0., 1.)):
-                    raise ValueError('normalization options require normalize=True')
+                _validate_processing_options(parameters)
             except (TypeError, ValueError) as exc:
                 raise type(exc)(f'{prefix} ({name!r}): {exc}') from exc
-            for key in ('clip', 'normalization_range'):
-                if parameters.get(key) is not None:
-                    try:
-                        _validate_range(parameters[key], key)
-                    except (ValueError, TypeError) as exc:
-                        raise type(exc)(f'{prefix} ({name!r}): {exc}') from exc
-            rescale_dtype = parameters.get('rescale_dtype')
-            if rescale_dtype is not None:
-                if parameters.get('normalize', False):
-                    raise ValueError(f'{prefix} ({name!r}): rescale_dtype cannot be used with '
-                                     'normalize=True; remove normalize=True or rescale_dtype.')
-                if parameters.get('cast_dtype') is not None:
-                    raise ValueError(f'{prefix} ({name!r}): rescale_dtype cannot be used with '
-                                     'cast_dtype; remove one of these options.')
-                try:
-                    target_dtype = np.dtype(rescale_dtype)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f'{prefix} ({name!r}): invalid rescale_dtype {rescale_dtype!r}; '
-                                     'choose "uint8" or "uint16".') from exc
-                if target_dtype not in (np.dtype('uint8'), np.dtype('uint16')):
-                    raise TypeError(f'{prefix} ({name!r}): rescale_dtype must be uint8 or uint16, '
-                                    f'got {rescale_dtype!r}; choose "uint8" or "uint16".')
-            if parameters.get('cast_dtype') is not None:
-                try:
-                    np.dtype(parameters['cast_dtype'])
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f'{prefix} ({name!r}): invalid cast_dtype: {exc}') from exc
             # Validate image-independent filter parameters before processing any data.
             try:
                 if name in ('gaussian', 'gaussian_gradient_magnitude', 'fft_highpass'):

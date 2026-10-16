@@ -200,7 +200,7 @@ class TestFilters(unittest.TestCase):
 
     def test_fft_constant(self):
         print('Testing fft_highpass on a constant image ...')
-        from squirrel.library.filters import fft_highpass
+        from squirrel.library.image import fft_highpass
         img = np.ones((12, 15))
         result = fft_highpass(img, (2, 3))
         self.assertLess(np.max(np.abs(result)), 1e-12)

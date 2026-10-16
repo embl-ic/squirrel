@@ -8,7 +8,6 @@ from multiprocessing import Pool, get_context
 import numpy as np
 
 from squirrel.library.normalization import normalize_image, _validate_pair
-from squirrel.library.image import fft_highpass
 from squirrel.library.dtype import working_dtype, safe_cast, rescale_integer_dtype
 
 

@@ -1,6 +1,8 @@
 import unittest
 import warnings
 import sys
+import os
+import tempfile
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 import numpy as np
@@ -49,11 +51,13 @@ class TestFilterWorkflowDtype(unittest.TestCase):
             with self.subTest(pipeline=pipeline):
                 zarr_module.OMEZarrStore.create.reset_mock()
                 store.reset_mock()
-                with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
-                     patch('squirrel.library.io.get_filetype', return_value='ome_zarr'), \
-                     patch.dict(sys.modules, {'squirrel.library.ome_zarr': zarr_module}):
-                    filter_2d_workflow('input', 'output.ome.zarr', filters=pipeline,
-                                       batch_size=2, n_workers=1)
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    out_path = os.path.join(tmp_dir, 'output.ome.zarr')
+                    with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
+                         patch('squirrel.library.io.get_filetype', return_value='ome_zarr'), \
+                         patch.dict(sys.modules, {'squirrel.library.ome_zarr': zarr_module}):
+                        filter_2d_workflow('input', out_path, filters=pipeline,
+                                           batch_size=2, n_workers=1)
                 self.assertEqual(zarr_module.OMEZarrStore.create.call_args.kwargs['dtype'], expected_dtype)
                 self.assertEqual(store.write.call_count, 2)
                 for call in store.write.call_args_list:
@@ -1111,6 +1115,51 @@ class TestFilterWorkflowResume(unittest.TestCase):
                     filter_2d_workflow('input', output, filters=filters, batch_size=2,
                                        n_workers=1, progress=False, resume=True)
                     self.assertEqual(process.call_count, 1)
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])
+
+    def test_ome_zarr_resume_rewrites_uncommitted_batch(self):
+        print('Testing OME-Zarr resume and incomplete batch replacement')
+        import json
+        import os
+        import tempfile
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        data = np.ones((4, 8, 8), dtype=np.uint16)
+        filters = [['gaussian', {'sigma': 1}]]
+        store = MagicMock()
+        store.shape.return_value = data.shape
+        store.dtype.return_value = data.dtype
+        store.metadata.levels = ['s0', 's1', 's2']
+        module = ModuleType('squirrel.library.ome_zarr')
+        module.OMEZarrStore = MagicMock(return_value=store)
+        module.OMEZarrStore.create.return_value = store
+
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, 'output.ome.zarr')
+            with patch.dict(sys.modules, {'squirrel.library.ome_zarr': module}), \
+                    patch('squirrel.library.io.load_data_handle', return_value=(data, data.shape)), \
+                    patch('squirrel.library.filters.ImageFilter.get_filtered_stack', return_value=data[:2]):
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False)
+                self.assertEqual(module.OMEZarrStore.create.call_count, 1)
+                checkpoint_path = os.path.join(output, '.squirrel_filter_checkpoint.json')
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])
+                self.assertEqual(checkpoint['output_dtype'], 'uint16')
+                checkpoint['completed_batches'] = [[0, 2]]
+                with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                    json.dump(checkpoint, f)
+
+                store.write.reset_mock()
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False, resume=True)
+                module.OMEZarrStore.assert_called_once_with(output, mode='r+')
+                store.write.assert_called_once()
+                self.assertEqual(store.write.call_args.kwargs['require_empty'], False)
+                self.assertEqual(store.write.call_args.args[1], [2, 0, 0])
                 with open(checkpoint_path, encoding='utf-8') as f:
                     checkpoint = json.load(f)
                 self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])

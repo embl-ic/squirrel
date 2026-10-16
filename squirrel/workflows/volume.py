@@ -597,14 +597,11 @@ def filter_2d_workflow(
     if stack_shape[0] < 1:
         raise ValueError('Cannot filter an empty stack')
 
-    # TIFF checkpoint support is deliberately scoped to directory output.
-    if resume and out_filetype != 'dir':
-        raise ValueError('resume currently supports only TIFF-directory output')
 
     checkpoint_path = os.path.join(os.fspath(out_path), '.squirrel_filter_checkpoint.json')
     checkpoint = None
     completed = set()
-    if batch_size is not None and out_filetype == 'dir':
+    if batch_size is not None and out_filetype in ('dir', 'ome_zarr'):
         expected = dict(version=1, input_path=os.path.abspath(os.fspath(input_path)),
                         filters=filters, stack_shape=list(map(int, stack_shape)),
                         batch_size=int(batch_size), save_intermediates=bool(save_intermediates))
@@ -703,7 +700,24 @@ def filter_2d_workflow(
             stack_handle[first_z:min(first_z + batch_size, stack_shape[0])],
             callback=progress_bar.update)
         output_dtype = first_batch.dtype
-        if out_filetype == 'ome_zarr':
+        if out_filetype == 'ome_zarr' and checkpoint is not None:
+            # Store the dtype to detect incompatible output on restart.
+            if 'output_dtype' in checkpoint:
+                if np.dtype(checkpoint['output_dtype']) != output_dtype:
+                    raise ValueError('Cannot resume: checkpoint output dtype does not match filter result')
+            else:
+                checkpoint['output_dtype'] = np.dtype(output_dtype).name
+
+        if out_filetype == 'ome_zarr' and os.path.exists(out_path) and resume:
+            from squirrel.library.ome_zarr import OMEZarrStore
+            oz = OMEZarrStore(out_path, mode='r+')
+            if tuple(oz.shape(0)) != tuple(stack_shape):
+                raise ValueError('Cannot resume: OME-Zarr shape does not match input')
+            if np.dtype(oz.dtype(0)) != output_dtype:
+                raise ValueError('Cannot resume: OME-Zarr dtype does not match filter result')
+            if len(oz.metadata.levels) != 3:
+                raise ValueError('Cannot resume: OME-Zarr pyramid configuration differs')
+        elif out_filetype == 'ome_zarr':
             if verbose:
                 print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {output_dtype}')
             from squirrel.library.ome_zarr import OMEZarrStore
@@ -716,6 +730,10 @@ def filter_2d_workflow(
                 shards=None,
                 overwrite=False
             )
+        if out_filetype == 'ome_zarr' and checkpoint is not None:
+            # Persist the manifest before any data write so a crash during
+            # the first batch can be resumed safely.
+            save_checkpoint()
 
         def _write_batch(batch, id_offset, out_path):
             out_filetype = get_filetype(out_path)
@@ -729,7 +747,7 @@ def filter_2d_workflow(
                     data=batch,
                     update_pyramid=True,
                     check_pyramid_alignment=True,
-                    require_empty=True
+                    require_empty=not resume
                 )
                 return
             raise ValueError(f'Invalid output type = {out_filetype}')

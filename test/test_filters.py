@@ -148,7 +148,7 @@ class TestImageFilter(unittest.TestCase):
         np.testing.assert_array_equal(result, [0, 0])
         self.assertEqual(result.dtype.kind, 'f')
 
-    def test_safe_cast(self):
+    def testsafe_cast(self):
         print('Testing safe integer casting ...')
         from squirrel.library.filters import ImageFilter
         img = np.array([-10., 100., 70000.])
@@ -973,3 +973,37 @@ class TestExtractedImageAlgorithms(unittest.TestCase):
             fft_highpass(np.zeros((5, 5)), sigma=-1)
         with self.assertRaisesRegex(ValueError, 'exactly one'):
             median_filter_2d(np.zeros((5, 5)))
+
+class TestSharedDtypeUtilities(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_shared_dtype_public_imports(self):
+        print('Testing shared dtype utilities are publicly accessible from filters and dtype ...')
+        from squirrel.library import dtype as dtype_utils
+        from squirrel.library import filters
+
+        self.assertIs(filters.working_dtype, dtype_utils.working_dtype)
+        self.assertIs(filters.safe_cast, dtype_utils.safe_cast)
+        self.assertIs(filters.rescale_integer_dtype, dtype_utils.rescale_integer_dtype)
+
+    def test_shared_dtype_cast_and_rescale(self):
+        print('Testing shared dtype casting and fixed-range rescaling ...')
+        from squirrel.library.dtype import safe_cast, rescale_integer_dtype, working_dtype
+
+        np.testing.assert_array_equal(
+            safe_cast(np.array([-10, 20, 300, np.nan]), 'uint8'),
+            np.array([0, 20, 255, 0], dtype=np.uint8))
+        np.testing.assert_array_equal(
+            rescale_integer_dtype(np.array([0, 32768, 65535], dtype=np.uint16), 'uint8'),
+            np.array([0, 128, 255], dtype=np.uint8))
+        self.assertEqual(working_dtype(np.zeros(2, dtype=np.uint16)), np.float32)
+        self.assertEqual(working_dtype(np.zeros(2, dtype=np.uint32)), np.float64)
+
+    def test_shared_dtype_rejects_unsupported_rescale(self):
+        print('Testing fixed-range rescaling rejects unsupported dtypes ...')
+        from squirrel.library.dtype import rescale_integer_dtype
+
+        with self.assertRaisesRegex(TypeError, 'uint8 and uint16'):
+            rescale_integer_dtype(np.array([1.0], dtype=np.float32), 'uint8')

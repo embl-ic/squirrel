@@ -9,14 +9,7 @@ import numpy as np
 
 from squirrel.library.normalization import normalize_image, _validate_pair
 from squirrel.library.image import fft_highpass
-
-
-def _working_dtype(*arrays):
-    """Select a float dtype suitable for arithmetic on input arrays."""
-    dtypes = [np.asarray(a).dtype for a in arrays]
-    if any(d.kind == 'f' and d.itemsize > 4 or d.kind in 'iu' and d.itemsize > 2 for d in dtypes):
-        return np.float64
-    return np.float32
+from squirrel.library.dtype import working_dtype, safe_cast, rescale_integer_dtype
 
 
 def _validate_range(value, name):
@@ -38,41 +31,6 @@ def _validate_range(value, name):
     if not np.isfinite(low) or not np.isfinite(high) or low >= high:
         raise ValueError(f'{name} must contain two finite, strictly increasing values; got {value!r}')
     return low, high
-
-
-def _safe_cast(array, dtype):
-    dtype = np.dtype(dtype)
-    array = np.asarray(array)
-    if np.issubdtype(dtype, np.integer):
-        limits = np.iinfo(dtype)
-        # Integer casts of NaN and infinity are platform-dependent.
-        array = np.nan_to_num(array, nan=0.0, posinf=float(limits.max), neginf=float(limits.min))
-        array = np.clip(array, limits.min, limits.max)
-    return array.astype(dtype)
-
-
-def _rescale_integer_dtype(array, target_dtype):
-    """Map the full uint8/uint16 range to the target dtype range."""
-    array = np.asarray(array)
-    source_dtype = array.dtype
-    target_dtype = np.dtype(target_dtype)
-    supported = (np.dtype('uint8'), np.dtype('uint16'))
-    if source_dtype not in supported or target_dtype not in supported:
-        raise TypeError(
-            f'rescale_dtype supports only uint8 and uint16 input/output; '
-            f'got input {source_dtype} and output {target_dtype}. '
-            'Convert the input to uint8 or uint16 first, or use '
-            'normalize=True with cast_dtype for data-dependent normalization.')
-
-    if source_dtype == target_dtype:
-        return array.copy()
-
-    source_max = np.iinfo(source_dtype).max
-    target_max = np.iinfo(target_dtype).max
-    # Integer arithmetic gives deterministic round-to-nearest for both
-    # directions without float32 precision loss or per-image statistics.
-    scaled = (array.astype(np.uint64) * target_max + source_max // 2) // source_max
-    return scaled.astype(target_dtype)
 
 
 def _validate_boolean_options(parameters, prefix=''):
@@ -167,7 +125,7 @@ def filter_wrapper(func):
         if filtered.shape != original.shape:
             raise ValueError(f'{func.__name__} returned shape {filtered.shape}, expected {original.shape}')
         if filter_mode != 'apply':
-            work_dtype = _working_dtype(original, filtered)
+            work_dtype = working_dtype(original, filtered)
             left, right = original.astype(work_dtype), filtered.astype(work_dtype)
             result = left + right if filter_mode == 'add' else left - right
         else:
@@ -176,7 +134,7 @@ def filter_wrapper(func):
             result = np.clip(result, *clip)
         dtype = np.dtype(cast_dtype) if cast_dtype is not None else None
         if rescale_dtype is not None:
-            result = _rescale_integer_dtype(result, rescale_dtype)
+            result = rescale_integer_dtype(result, rescale_dtype)
         elif normalize:
             target_dtype = dtype if dtype is not None else np.dtype('float32')
             result = normalize_image(
@@ -184,7 +142,7 @@ def filter_wrapper(func):
                 normalization_range=normalization_range, anchors=anchors,
                 output_dtype=target_dtype, ignore_zeros=ignore_zeros)
         elif dtype is not None:
-            result = _safe_cast(result, dtype)
+            result = safe_cast(result, dtype)
         if zero_mask is not None:
             result = np.where(zero_mask, 0, result)
         return result
@@ -512,13 +470,13 @@ class ImageFilter:
     @filter_wrapper
     def gaussian(in_array, sigma=1.0):
         from vigra.filters import gaussianSmoothing
-        return gaussianSmoothing(in_array.astype(_working_dtype(in_array)), sigma=sigma)
+        return gaussianSmoothing(in_array.astype(working_dtype(in_array)), sigma=sigma)
 
     @staticmethod
     @filter_wrapper
     def gaussian_gradient_magnitude(in_array, sigma=1.0):
         from vigra.filters import gaussianGradientMagnitude
-        return gaussianGradientMagnitude(in_array.astype(_working_dtype(in_array)), sigma=sigma)
+        return gaussianGradientMagnitude(in_array.astype(working_dtype(in_array)), sigma=sigma)
 
     @staticmethod
     @filter_wrapper
@@ -556,7 +514,7 @@ class ImageFilter:
     def invert(in_array, invert_range=None):
         if invert_range is not None:
             low, high = _validate_range(invert_range, 'invert_range')
-            return (low + high) - in_array.astype(_working_dtype(in_array))
+            return (low + high) - in_array.astype(working_dtype(in_array))
         if np.issubdtype(in_array.dtype, np.unsignedinteger):
             return np.iinfo(in_array.dtype).max - in_array
         raise ValueError('invert_range is required for signed integer or floating-point images')

@@ -272,3 +272,15 @@ filtered = ImageFilter(stack).get_filtered_stack(
     pipeline, n_workers=4, backend='threading', progress=True
 )
 ```
+
+### Volume intermediate previews
+
+Pass `save_intermediates=True` to `filter_2d_workflow`, or
+`--save_intermediates` to the `filter_2d` stack command, to write Fiji-compatible
+8-bit previews after each filter step. For a TIFF stack written to
+`output_stack/`, previews are saved to
+`output_stack_intermediates/filter00_<name>/slice_00000.tif`, etc.
+Each slice is min-max scaled independently to uint8, as in the image
+workflow. Constant-valued images become all-zero previews. The final
+stack retains its original filtered dtype. Preview generation works with
+batched and unbatched processing and is disabled by default.

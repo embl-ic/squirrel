@@ -367,7 +367,7 @@ class ImageFilter:
 
     def get_filtered_stack(self, filters: list | tuple, n_workers: int = 1,
                            backend: str = 'threading', progress: bool = True,
-                           progress_callback=None) -> np.ndarray:
+                           progress_callback=None, return_intermediates: bool = False) -> np.ndarray:
         """Apply the same pipeline independently to each stack slice.
 
         Parameters
@@ -381,6 +381,8 @@ class ImageFilter:
             The serial backend requires ``n_workers=1``.
         progress : bool, optional
             Show a slice-level progress bar when no callback is supplied.
+        return_intermediates : bool, optional
+            Return filtered stack and per-step intermediate stacks.
         progress_callback : callable or None, optional
             Called with the number of newly completed slices. Allows workflows
             to maintain a single progress bar across batches.
@@ -414,6 +416,8 @@ class ImageFilter:
             raise ValueError('Stack processing requires a nonempty input stack')
         if not isinstance(progress, (bool, np.bool_)):
             raise TypeError(f'progress must be a boolean, got {progress!r}')
+        if not isinstance(return_intermediates, (bool, np.bool_)):
+            raise TypeError(f'return_intermediates must be a boolean, got {return_intermediates!r}')
         if progress_callback is not None and not callable(progress_callback):
             raise TypeError('progress_callback must be callable or None')
 
@@ -429,24 +433,35 @@ class ImageFilter:
                         bar.update(1)
                     yield result
 
-            if n_workers == 1:
-                results = (self.get_filtered(steps, in_array=sl) for sl in stack)
-                return np.asarray(list(completed_slices(results)))
+            def assemble(results):
+                results = list(completed_slices(results))
+                if not return_intermediates:
+                    return np.asarray(results)
+                filtered, intermediates = zip(*results)
+                return np.asarray(filtered), [
+                    np.asarray(step) for step in zip(*intermediates)
+                ] if steps else []
 
-            worker = partial(_filter_slice, filters=steps)
+            if n_workers == 1:
+                results = (self.get_filtered(steps, in_array=sl,
+                            return_intermediates=return_intermediates) for sl in stack)
+                return assemble(results)
+
+            worker = (partial(_filter_slice, filters=steps, return_intermediates=True)
+                      if return_intermediates else partial(_filter_slice, filters=steps))
             if backend == 'threading':
                 with ThreadPoolExecutor(max_workers=int(n_workers)) as executor:
-                    return np.asarray(list(completed_slices(executor.map(worker, stack))))
+                    return assemble(executor.map(worker, stack))
 
             # CLAHE uses OpenCV, whose native thread state can be unsafe to
             # inherit with fork after CLAHE has run in the parent process.
             if any(name == 'clahe' for name, _ in steps):
                 with get_context('spawn').Pool(
                         processes=int(n_workers), initializer=_init_opencv_worker) as pool:
-                    return np.asarray(list(completed_slices(pool.imap(worker, stack, chunksize=1))))
+                    return assemble(pool.imap(worker, stack, chunksize=1))
 
             with Pool(processes=int(n_workers)) as pool:
-                return np.asarray(list(completed_slices(pool.imap(worker, stack, chunksize=1))))
+                return assemble(pool.imap(worker, stack, chunksize=1))
 
     @classmethod
     def get_available_filter_names(cls) -> list[str]:
@@ -553,7 +568,9 @@ class ImageFilter:
         return in_array
 
 
-def _filter_slice(image, filters):
+def _filter_slice(image, filters, return_intermediates=False):
+    if return_intermediates:
+        return ImageFilter(image).get_filtered(filters, return_intermediates=True)
     return ImageFilter(image).get_filtered(filters)
 
 

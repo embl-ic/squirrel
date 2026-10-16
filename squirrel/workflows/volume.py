@@ -550,8 +550,11 @@ def filter_2d_workflow(
         batch_size=None,
         n_workers=1,
         verbose=False,
-        progress=True
+        progress=True,
+        save_intermediates=False
 ):
+    if not isinstance(save_intermediates, (bool, np.bool_)):
+        raise TypeError(f'save_intermediates must be a boolean, got {save_intermediates!r}')
     if not isinstance(progress, (bool, np.bool_)):
         raise TypeError(f'progress must be a boolean, got {progress!r}')
 
@@ -564,6 +567,7 @@ def filter_2d_workflow(
         print(f'batch_size = {batch_size}')
         print(f'n_workers = {n_workers}')
         print(f'progress = {progress}')
+        print(f'save_intermediates = {save_intermediates}')
 
     from squirrel.library.filters import ImageFilter
     ImageFilter.validate_pipeline(filters)
@@ -585,13 +589,42 @@ def filter_2d_workflow(
     if stack_shape[0] < 1:
         raise ValueError('Cannot filter an empty stack')
 
+    intermediate_root = f'{os.path.splitext(os.fspath(out_path))[0]}_intermediates'
+
+    def write_intermediates(intermediates, offset):
+        if not save_intermediates:
+            return
+        from squirrel.library.io import write_tif_stack
+        for index, intermediate_stack in enumerate(intermediates):
+            folder = os.path.join(intermediate_root, f'filter{index:02d}_{filters[index][0]}')
+            os.makedirs(folder, exist_ok=True)
+            previews = []
+            for intermediate in intermediate_stack:
+                values = intermediate.astype(np.float64)
+                low, high = values.min(), values.max()
+                if high == low:
+                    preview = np.zeros(values.shape, dtype=np.uint8)
+                else:
+                    preview = ((values - low) / (high - low) * 255).astype(np.uint8)
+                previews.append(preview)
+            write_tif_stack(previews, folder, id_offset=offset,
+                            slice_name='slice_{:05d}.tif')
+
+    def filter_batch(data, callback=None, show_progress=False):
+        result = ImageFilter(data).get_filtered_stack(
+            filters, n_workers=n_workers, progress=show_progress,
+            progress_callback=callback, return_intermediates=save_intermediates)
+        if save_intermediates:
+            return result
+        return result, None
+
     if verbose:
         print(f'Filtering stack with shape {stack_shape}, workers={n_workers}, batch_size={batch_size}')
 
     if batch_size is None:
 
-        imf = ImageFilter(stack_handle[:])
-        filtered_stack = imf.get_filtered_stack(filters, n_workers=n_workers, progress=progress)
+        filtered_stack, intermediates = filter_batch(stack_handle[:], show_progress=progress)
+        write_intermediates(intermediates, 0)
         if verbose:
             print(f'Writing filtered stack to {out_path} ...')
         write_stack(out_path, filtered_stack, key=out_key)
@@ -605,9 +638,8 @@ def filter_2d_workflow(
     try:
         # Filter the first batch before creating the output container: the pipeline
         # may change dtype via casting, normalization, or arithmetic modes.
-        first_batch = ImageFilter(stack_handle[:min(batch_size, stack_shape[0])]).get_filtered_stack(
-            filters, n_workers=n_workers, progress=False, progress_callback=progress_bar.update
-        )
+        first_batch, first_intermediates = filter_batch(
+            stack_handle[:min(batch_size, stack_shape[0])], callback=progress_bar.update)
         output_dtype = first_batch.dtype
         if out_filetype == 'ome_zarr':
             if verbose:
@@ -646,16 +678,17 @@ def filter_2d_workflow(
                 print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
             if zidx == 0:
                 filtered_substack = first_batch
+                intermediates = first_intermediates
             else:
-                imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
-                filtered_substack = imf.get_filtered_stack(
-                    filters, n_workers=n_workers, progress=False, progress_callback=progress_bar.update)
+                filtered_substack, intermediates = filter_batch(
+                    stack_handle[zidx: zidx + batch_size], callback=progress_bar.update)
                 if filtered_substack.dtype != output_dtype:
                     raise TypeError(f'Filter output dtype changed between batches: '
                                     f'{output_dtype} -> {filtered_substack.dtype}')
             if verbose:
                 print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
             _write_batch(filtered_substack, zidx, out_path)
+            write_intermediates(intermediates, zidx)
 
         if verbose:
             print('Filtering complete')

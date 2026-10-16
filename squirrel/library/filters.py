@@ -62,12 +62,20 @@ def _validate_processing_options(parameters):
             options[key] = _validate_range(options[key], key)
 
     method = options.get('normalization_method', 'minmax')
-    if method not in ('minmax', 'quantile'):
+    if method not in ('minmax', 'quantile', 'peak'):
         raise ValueError(f'Unknown normalization_method: {method!r}')
     quantiles = options.get('quantiles', (0.01, 0.99))
     anchors = options.get('anchors', (0.0, 1.0))
     _validate_pair(quantiles, 'quantiles', unit=True)
     _validate_pair(anchors, 'anchors', unit=True)
+    for key, default in (('peak_target', 0.5), ('peak_width_target', 0.15),
+                         ('peak_smoothing_sigma', 3.0), ('peak_search_range', None)):
+        if not normalize and options.get(key, default) != default:
+            raise ValueError('normalization options require normalize=True')
+    if method == 'peak' and options.get('normalization_range') is not None:
+        raise ValueError('normalization_range is not supported for peak normalization')
+    if method == 'peak' and tuple(anchors) != (0.0, 1.0):
+        raise ValueError('anchors are not supported for peak normalization')
     if not normalize and (method != 'minmax' or tuple(quantiles) != (0.01, 0.99) or
                           tuple(anchors) != (0.0, 1.0)):
         raise ValueError('normalization options require normalize=True')
@@ -112,12 +120,17 @@ def filter_wrapper(func):
                 normalize=False, normalization_range=None, cast_dtype=None,
                  rescale_dtype=None,
                 normalization_method='minmax', quantiles=(0.01, 0.99),
-                anchors=(0.0, 1.0),
+                anchors=(0.0, 1.0), peak_target=0.5,
+                peak_width_target=0.15, peak_smoothing_sigma=3.0,
+                peak_search_range=None,
                 keep_zeros=False, ignore_zeros=False, zeros_to_mean=False, **kwargs):
         options = dict(filter_mode=filter_mode, clip=clip, normalize=normalize,
                        normalization_range=normalization_range, cast_dtype=cast_dtype,
                        rescale_dtype=rescale_dtype, normalization_method=normalization_method,
-                       quantiles=quantiles, anchors=anchors, keep_zeros=keep_zeros,
+                       quantiles=quantiles, anchors=anchors, peak_target=peak_target,
+                       peak_width_target=peak_width_target,
+                       peak_smoothing_sigma=peak_smoothing_sigma,
+                       peak_search_range=peak_search_range, keep_zeros=keep_zeros,
                        ignore_zeros=ignore_zeros, zeros_to_mean=zeros_to_mean)
         try:
             validated_options = _validate_processing_options(options)
@@ -179,7 +192,10 @@ def filter_wrapper(func):
             result = normalize_image(
                 result, method=normalization_method, quantiles=quantiles,
                 normalization_range=normalization_range, anchors=anchors,
-                output_dtype=target_dtype, ignore_zeros=ignore_zeros)
+                output_dtype=target_dtype, ignore_zeros=ignore_zeros,
+                peak_target=peak_target, peak_width_target=peak_width_target,
+                peak_smoothing_sigma=peak_smoothing_sigma,
+                peak_search_range=peak_search_range)
         elif dtype is not None:
             result = safe_cast(result, dtype)
         if zero_mask is not None:

@@ -56,7 +56,11 @@ Every filter accepts the following options in its parameter dictionary, in addit
 | `filter_mode` | `'apply'` | `'apply'` uses the filter output; `'add'` adds it to the original image; `'subtract'` subtracts it from the original image. |
 | `clip` | `None` | Optional `[minimum, maximum]` range applied after the filter/mode. |
 | `normalize` | `False` | Normalize the filtered result after filtering, `filter_mode`, and `clip`. |
-| `normalization_method` | `'minmax'` | Choose `'minmax'` or `'quantile'` to estimate input intensity limits. |
+| `normalization_method` | `'minmax'` | Choose `'minmax'`, `'quantile'`, or `'peak'` to estimate input intensity limits. |
+| `peak_target` | `0.5` | Target dominant histogram peak intensity, as a fraction of output range. |
+| `peak_width_target` | `0.15` | Target peak FWHM, in fractional output intensity units. |
+| `peak_smoothing_sigma` | `3.0` | Gaussian smoothing sigma in histogram bins. |
+| `peak_search_range` | `None` | Optional input-intensity interval for searching the dominant peak. |
 | `quantiles` | `(0.01, 0.99)` | Lower and upper quantile fractions for `'quantile'` normalization. |
 | `anchors` | `(0.0, 1.0)` | Fractions of the output intensity range to which the input limits are mapped. |
 | `normalization_range` | `None` | Optional `[minimum, maximum]` range; requires `normalize=True`. |
@@ -320,3 +324,24 @@ Each slice is min-max scaled independently to uint8, as in the image
 workflow. Constant-valued images become all-zero previews. The final
 stack retains its original filtered dtype. Preview generation works with
 batched and unbatched processing and is disabled by default.
+
+### Peak normalization (experimental)
+
+`normalization_method='peak'` detects the dominant mode in a 256-bin histogram,
+smooths it, measures its full width at half maximum (FWHM), and applies an
+affine intensity transform mapping its center to `peak_target` and its FWHM
+to `peak_width_target`. Output is clipped to the target dtype range. This
+normalizes peak position and width, **not histogram peak height**.
+
+```python
+normalized = normalize_image(
+    image, method='peak', peak_target=0.5, peak_width_target=0.15,
+    peak_smoothing_sigma=3.0, peak_search_range=None
+)
+```
+
+Peak normalization works per slice and does not yet regularize parameters
+along Z. `anchors` must remain `(0.0, 1.0)` and `normalization_range`
+is not supported for this method. Constant images or peaks with no
+measurable half-maximum crossings return zeros. Strong charging may
+still cause the wrong peak to be selected; `peak_search_range` can help.

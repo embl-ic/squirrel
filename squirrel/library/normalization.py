@@ -42,10 +42,73 @@ def get_normalization_limits(image, method='minmax', quantiles=(0.01, 0.99), mas
     return float(low), float(high)
 
 
+def get_histogram_peak(image, smoothing_sigma=3.0, search_range=None,
+                       bins=256, mask=None, ignore_zeros=False):
+    """Estimate dominant histogram mode and full width at half maximum.
+
+    Return None if the selected data or peak width is degenerate.
+    """
+    from scipy.ndimage import gaussian_filter1d
+
+    if not np.isfinite(smoothing_sigma) or smoothing_sigma < 0:
+        raise ValueError('peak_smoothing_sigma must be finite and nonnegative')
+    if isinstance(bins, (bool, np.bool_)) or not isinstance(bins, (int, np.integer)) or bins < 3:
+        raise ValueError('peak_bins must be an integer >= 3')
+    if search_range is not None:
+        search_range = _validate_pair(search_range, 'peak_search_range')
+
+    data = np.asarray(image)
+    if mask is not None:
+        mask = np.asarray(mask)
+        if mask.shape != data.shape or mask.dtype.kind != 'b':
+            raise ValueError('mask must be boolean and match image shape')
+        data = data[mask]
+    data = data[np.isfinite(data)]
+    if ignore_zeros:
+        data = data[data != 0]
+    if data.size == 0 or np.min(data) == np.max(data):
+        return None
+
+    hist, edges = np.histogram(data, bins=bins)
+    hist = gaussian_filter1d(hist.astype(np.float64), smoothing_sigma)
+    centers = (edges[:-1] + edges[1:]) / 2
+    eligible = np.ones(centers.shape, dtype=bool)
+    if search_range is not None:
+        eligible = (centers >= search_range[0]) & (centers <= search_range[1])
+    if not np.any(eligible):
+        return None
+    peak_index = np.argmax(np.where(eligible, hist, -np.inf))
+    peak_height = hist[peak_index]
+    half_height = peak_height / 2
+
+    left = peak_index
+    while left > 0 and hist[left] >= half_height:
+        left -= 1
+    right = peak_index
+    while right < len(hist) - 1 and hist[right] >= half_height:
+        right += 1
+    if left == 0 and hist[left] >= half_height:
+        return None
+    if right == len(hist) - 1 and hist[right] >= half_height:
+        return None
+    if left == peak_index or right == peak_index:
+        return None
+
+    left_crossing = np.interp(half_height, hist[left:left + 2], centers[left:left + 2])
+    right_crossing = np.interp(half_height, hist[right - 1:right + 1][::-1],
+                               centers[right - 1:right + 1][::-1])
+    width = right_crossing - left_crossing
+    if not np.isfinite(width) or width <= 0:
+        return None
+    return float(centers[peak_index]), float(width)
+
+
 def normalize_image(image, method='minmax', quantiles=(0.01, 0.99),
                     normalization_range=None, anchors=(0.0, 1.0),
                     output_dtype='float32', mask=None, ignore_zeros=False,
-                    keep_zeros=False):
+                    keep_zeros=False, peak_target=0.5,
+                    peak_width_target=0.15, peak_smoothing_sigma=3.0,
+                    peak_search_range=None):
     """Linearly map input limits to fractional output anchors, clipping to dtype range.
 
     Integer outputs use their full dtype range; floating outputs use [0, 1].
@@ -57,11 +120,35 @@ def normalize_image(image, method='minmax', quantiles=(0.01, 0.99),
     if dtype.kind not in 'fiu':
         raise TypeError('output_dtype must be a real numeric dtype')
     anchors = _validate_pair(anchors, 'anchors', unit=True)
-    if method not in ('minmax', 'quantile'):
+    if method not in ('minmax', 'quantile', 'peak'):
         raise ValueError(f'Unknown normalization method: {method!r}')
     _validate_pair(quantiles, 'quantiles', unit=True)
     if not isinstance(keep_zeros, (bool, np.bool_)):
         raise TypeError('keep_zeros must be boolean')
+    if method == 'peak':
+        if normalization_range is not None:
+            raise ValueError('normalization_range is not supported for peak normalization')
+        if anchors != (0.0, 1.0):
+            raise ValueError('anchors are not supported for peak normalization')
+        if not np.isfinite(peak_target) or not 0 <= peak_target <= 1:
+            raise ValueError('peak_target must lie in [0, 1]')
+        if not np.isfinite(peak_width_target) or peak_width_target <= 0:
+            raise ValueError('peak_width_target must be positive and finite')
+        peak = get_histogram_peak(data, smoothing_sigma=peak_smoothing_sigma,
+                                  search_range=peak_search_range, mask=mask,
+                                  ignore_zeros=ignore_zeros)
+        if peak is None:
+            return np.zeros(data.shape, dtype=dtype)
+        center, width = peak
+        fraction = (data.astype(np.float64) - center) * (peak_width_target / width) + peak_target
+        fraction = np.clip(np.nan_to_num(fraction, nan=0., posinf=1., neginf=0.), 0, 1)
+        if dtype.kind in 'iu':
+            info = np.iinfo(dtype)
+            fraction = fraction * (float(info.max) - float(info.min)) + float(info.min)
+        result = fraction.astype(dtype)
+        if keep_zeros:
+            result[data == 0] = 0
+        return result
     limits = (_validate_pair(normalization_range, 'normalization_range')
               if normalization_range is not None else
               get_normalization_limits(data, method, quantiles, mask, ignore_zeros))

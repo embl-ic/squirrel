@@ -1,4 +1,6 @@
 import os.path
+import json
+import tempfile
 
 import numpy as np
 
@@ -551,8 +553,13 @@ def filter_2d_workflow(
         n_workers=1,
         verbose=False,
         progress=True,
-        save_intermediates=False
+        save_intermediates=False,
+        resume=False
 ):
+    if not isinstance(resume, (bool, np.bool_)):
+        raise TypeError(f'resume must be a boolean, got {resume!r}')
+    if resume and batch_size is None:
+        raise ValueError('resume requires batch_size')
     if not isinstance(save_intermediates, (bool, np.bool_)):
         raise TypeError(f'save_intermediates must be a boolean, got {save_intermediates!r}')
     if not isinstance(progress, (bool, np.bool_)):
@@ -568,6 +575,7 @@ def filter_2d_workflow(
         print(f'n_workers = {n_workers}')
         print(f'progress = {progress}')
         print(f'save_intermediates = {save_intermediates}')
+        print(f'resume = {resume}')
 
     from squirrel.library.filters import ImageFilter
     ImageFilter.validate_pipeline(filters)
@@ -588,6 +596,50 @@ def filter_2d_workflow(
     stack_handle, stack_shape = load_data_handle(input_path, key, pattern)
     if stack_shape[0] < 1:
         raise ValueError('Cannot filter an empty stack')
+
+    # TIFF checkpoint support is deliberately scoped to directory output.
+    if resume and out_filetype != 'dir':
+        raise ValueError('resume currently supports only TIFF-directory output')
+
+    checkpoint_path = os.path.join(os.fspath(out_path), '.squirrel_filter_checkpoint.json')
+    checkpoint = None
+    completed = set()
+    if batch_size is not None and out_filetype == 'dir':
+        expected = dict(version=1, input_path=os.path.abspath(os.fspath(input_path)),
+                        filters=filters, stack_shape=list(map(int, stack_shape)),
+                        batch_size=int(batch_size), save_intermediates=bool(save_intermediates))
+        if os.path.exists(checkpoint_path):
+            if not resume:
+                raise FileExistsError(f'Filtering checkpoint already exists: {checkpoint_path}; use resume=True')
+            with open(checkpoint_path, encoding='utf-8') as f:
+                checkpoint = json.load(f)
+            for field, value in expected.items():
+                if checkpoint.get(field) != value:
+                    raise ValueError(f'Cannot resume: checkpoint {field} does not match current run')
+            completed = {tuple(item) for item in checkpoint.get('completed_batches', [])}
+            valid = {(z, min(z + batch_size, stack_shape[0]))
+                     for z in range(0, stack_shape[0], batch_size)}
+            if not completed <= valid:
+                raise ValueError('Checkpoint contains invalid completed batches')
+        else:
+            if resume and os.path.exists(out_path) and os.listdir(out_path):
+                raise FileExistsError('Cannot resume: output directory exists without a checkpoint')
+            if not resume and os.path.exists(out_path) and os.listdir(out_path):
+                raise FileExistsError('Output directory is not empty; refusing to overwrite existing files')
+            checkpoint = dict(expected, completed_batches=[])
+
+    def save_checkpoint():
+        os.makedirs(out_path, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.squirrel_checkpoint_', dir=out_path)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(checkpoint, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, checkpoint_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     intermediate_root = f'{os.path.splitext(os.fspath(out_path))[0]}_intermediates'
 
@@ -633,13 +685,23 @@ def filter_2d_workflow(
         return
 
     from tqdm.auto import tqdm
-    progress_bar = tqdm(total=stack_shape[0], desc='Filtering', unit='slice', disable=not progress)
+    done_slices = sum(end - start for start, end in completed)
+    progress_bar = tqdm(total=stack_shape[0], initial=done_slices,
+                        desc='Filtering', unit='slice', disable=not progress)
 
     try:
         # Filter the first batch before creating the output container: the pipeline
         # may change dtype via casting, normalization, or arithmetic modes.
+        pending = [z for z in range(0, stack_shape[0], batch_size)
+                   if (z, min(z + batch_size, stack_shape[0])) not in completed]
+        if not pending:
+            if verbose:
+                print('All filtering batches are already complete')
+            return
+        first_z = pending[0]
         first_batch, first_intermediates = filter_batch(
-            stack_handle[:min(batch_size, stack_shape[0])], callback=progress_bar.update)
+            stack_handle[first_z:min(first_z + batch_size, stack_shape[0])],
+            callback=progress_bar.update)
         output_dtype = first_batch.dtype
         if out_filetype == 'ome_zarr':
             if verbose:
@@ -672,11 +734,11 @@ def filter_2d_workflow(
                 return
             raise ValueError(f'Invalid output type = {out_filetype}')
         
-        for zidx in range(0, stack_shape[0], batch_size):
+        for zidx in pending:
 
             if verbose:
                 print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
-            if zidx == 0:
+            if zidx == first_z:
                 filtered_substack = first_batch
                 intermediates = first_intermediates
             else:
@@ -689,6 +751,10 @@ def filter_2d_workflow(
                 print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
             _write_batch(filtered_substack, zidx, out_path)
             write_intermediates(intermediates, zidx)
+            if checkpoint is not None:
+                completed.add((zidx, min(zidx + batch_size, stack_shape[0])))
+                checkpoint['completed_batches'] = [list(item) for item in sorted(completed)]
+                save_checkpoint()
 
         if verbose:
             print('Filtering complete')

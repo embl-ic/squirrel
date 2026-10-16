@@ -1049,3 +1049,68 @@ class TestSharedProcessingValidation(unittest.TestCase):
         ImageFilter.validate_pipeline([['same', options]])
         self.assertEqual(options, {'clip': [0, 2], 'normalize': False})
         np.testing.assert_array_equal(ImageFilter.same(np.array([0, 1, 3]), **options), [0, 1, 2])
+
+class TestFilterWorkflowResume(unittest.TestCase):
+
+    def test_tiff_resume_skips_completed_batches(self):
+        print('Testing TIFF batch checkpoint and resumption')
+        import json
+        import os
+        import tempfile
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        data = np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8)
+        filters = [['gaussian', {'sigma': 1}]]
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, 'output')
+            with patch('squirrel.library.io.load_data_handle', return_value=(data, data.shape)), \
+                    patch('squirrel.library.filters.ImageFilter.get_filtered_stack',
+                          return_value=data[:2]):
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False)
+                checkpoint_path = os.path.join(output, '.squirrel_filter_checkpoint.json')
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])
+                with patch('squirrel.library.filters.ImageFilter.get_filtered_stack') as process:
+                    filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                       n_workers=1, progress=False, resume=True)
+                    process.assert_not_called()
+                with self.assertRaises(FileExistsError):
+                    filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                       n_workers=1, progress=False)
+                with self.assertRaisesRegex(ValueError, 'checkpoint filters'):
+                    filter_2d_workflow('input', output, filters=[['gaussian', {'sigma': 2}]],
+                                       batch_size=2, n_workers=1, progress=False, resume=True)
+
+    def test_tiff_resume_recomputes_uncommitted_batch(self):
+        print('Testing resumption recomputes incomplete TIFF batches')
+        import json
+        import os
+        import tempfile
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        data = np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8)
+        filters = [['gaussian', {'sigma': 1}]]
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, 'output')
+            with patch('squirrel.library.io.load_data_handle', return_value=(data, data.shape)), \
+                    patch('squirrel.library.filters.ImageFilter.get_filtered_stack',
+                          return_value=data[:2]):
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False)
+                checkpoint_path = os.path.join(output, '.squirrel_filter_checkpoint.json')
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                checkpoint['completed_batches'] = [[0, 2]]
+                with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                    json.dump(checkpoint, f)
+                with patch('squirrel.library.filters.ImageFilter.get_filtered_stack',
+                           wraps=None) as process:
+                    process.return_value = data[2:4]
+                    filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                       n_workers=1, progress=False, resume=True)
+                    self.assertEqual(process.call_count, 1)
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])

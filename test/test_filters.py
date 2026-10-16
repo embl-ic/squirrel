@@ -934,3 +934,42 @@ class TestRescaleDtype(unittest.TestCase):
                 with self.assertRaisesRegex(TypeError, 'input/output'):
                     self.ImageFilter(image.astype(dtype)).get_filtered(
                         [['same', {'rescale_dtype': 'uint8'}]])
+
+
+class TestExtractedImageAlgorithms(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_fft_highpass_matches_pipeline(self):
+        print('Testing standalone FFT high-pass matches ImageFilter ...')
+        from squirrel.library.image import fft_highpass
+        from squirrel.library.filters import ImageFilter
+
+        image = np.arange(80, dtype=np.uint16).reshape(8, 10)
+        expected = ImageFilter.fft_highpass(image, sigma=(2, 4))
+        np.testing.assert_array_equal(fft_highpass(image, sigma=(2, 4)), expected)
+
+    def test_median_filter_2d_matches_pipeline(self):
+        print('Testing standalone median matches ImageFilter ...')
+        from squirrel.library.image import median_filter_2d
+        from squirrel.library.filters import ImageFilter
+
+        image = np.arange(81, dtype=np.uint8).reshape(9, 9)
+        for kwargs in ({'radius': 1}, {'radius': (2, 1), 'elliptical_footprint': True},
+                       {'radius': 1, 'sample_footprint': 3, 'random_seed': 7},
+                       {'radius': 1, 'on_binned': 2},
+                       {'footprint': np.ones((3, 3), dtype=bool)}):
+            with self.subTest(kwargs=kwargs):
+                expected = ImageFilter.median(image, **kwargs)
+                actual = median_filter_2d(image, **kwargs)
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_standalone_validation(self):
+        print('Testing standalone image algorithm input validation ...')
+        from squirrel.library.image import fft_highpass, median_filter_2d
+
+        with self.assertRaisesRegex(ValueError, 'positive finite'):
+            fft_highpass(np.zeros((5, 5)), sigma=-1)
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            median_filter_2d(np.zeros((5, 5)))

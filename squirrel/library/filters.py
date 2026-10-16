@@ -8,6 +8,7 @@ from multiprocessing import Pool, get_context
 import numpy as np
 
 from squirrel.library.normalization import normalize_image, _validate_pair
+from squirrel.library.image import fft_highpass
 
 
 def _working_dtype(*arrays):
@@ -72,22 +73,6 @@ def _rescale_integer_dtype(array, target_dtype):
     # directions without float32 precision loss or per-image statistics.
     scaled = (array.astype(np.uint64) * target_max + source_max // 2) // source_max
     return scaled.astype(target_dtype)
-
-
-def fft_highpass(image: np.ndarray, sigma=(10, 10)) -> np.ndarray:
-    """FFT Gaussian high-pass on a 2D periodic image; sigma is (y, x)."""
-    image = np.asarray(image)
-    if image.ndim != 2:
-        raise ValueError('fft_highpass expects a 2D image')
-    if np.isscalar(sigma):
-        sigma = (sigma, sigma)
-    if len(sigma) != 2 or not np.all(np.isfinite(sigma)) or np.any(np.asarray(sigma) <= 0):
-        raise ValueError('sigma must contain two positive finite values')
-    sigma_y, sigma_x = sigma
-    ky = np.fft.fftfreq(image.shape[0])[:, None]
-    kx = np.fft.fftfreq(image.shape[1])[None, :]
-    response = -np.expm1(-2 * np.pi**2 * (sigma_y**2 * ky**2 + sigma_x**2 * kx**2))
-    return np.fft.ifft2(np.fft.fft2(image) * response).real
 
 
 def _validate_boolean_options(parameters, prefix=''):
@@ -539,52 +524,11 @@ class ImageFilter:
     @filter_wrapper
     def median(in_array, radius=None, footprint=None, elliptical_footprint=False,
                on_binned=1, sample_footprint=None, random_seed=None):
-        from scipy.ndimage import median_filter, zoom
-        if (radius is None) == (footprint is None):
-            raise ValueError('Supply exactly one of radius and footprint')
-        if not isinstance(on_binned, (int, np.integer)) or on_binned < 1:
-            raise ValueError('on_binned must be a positive integer')
-        if in_array.ndim != 2:
-            raise ValueError('median currently expects a 2D image')
-        original_shape = in_array.shape
-        if on_binned != 1:
-            from squirrel.library.scaling import average_bin_image
-            in_array = average_bin_image(in_array, on_binned)
-        if radius is not None:
-            if np.isscalar(radius):
-                radius = (radius, radius)
-            if len(radius) != 2 or any(not isinstance(r, (int, np.integer)) or r < 0 for r in radius):
-                raise ValueError('radius must be nonnegative integer or pair of nonnegative integers')
-            ry, rx = radius
-            if elliptical_footprint:
-                y, x = np.ogrid[-ry:ry + 1, -rx:rx + 1]
-                footprint = ((y / max(ry, 1))**2 + (x / max(rx, 1))**2 <= 1)
-            elif sample_footprint is not None:
-                footprint = np.ones((2 * ry + 1, 2 * rx + 1), dtype=bool)
-            else:
-                filtered = median_filter(in_array, size=(2 * ry + 1, 2 * rx + 1))
-                footprint = None
-        if footprint is not None:
-            footprint = np.asarray(footprint, dtype=bool)
-            if footprint.ndim != 2 or not np.any(footprint):
-                raise ValueError('footprint must be a nonempty 2D boolean mask')
-            if sample_footprint is not None:
-                if not isinstance(sample_footprint, (int, np.integer)) or sample_footprint < 1:
-                    raise ValueError('sample_footprint must be a positive integer')
-                coords = np.argwhere(footprint)
-                if sample_footprint < len(coords):
-                    rng = np.random.default_rng(random_seed)
-                    chosen = coords[rng.choice(len(coords), size=sample_footprint, replace=False)]
-                    footprint = np.zeros_like(footprint)
-                    footprint[tuple(chosen.T)] = True
-            from skimage.filters import median as sk_median
-            filtered = sk_median(in_array, footprint=footprint)
-        if on_binned != 1:
-            # Explicit target shape avoids unfilled zero borders for nondivisible dimensions.
-            factors = [target / source for target, source in zip(original_shape, filtered.shape)]
-            filtered = zoom(filtered, factors, order=3, mode='nearest', grid_mode=True)
-            filtered = filtered[tuple(slice(0, n) for n in original_shape)]
-        return filtered
+        from squirrel.library.image import median_filter_2d
+        return median_filter_2d(in_array, radius=radius, footprint=footprint,
+                                elliptical_footprint=elliptical_footprint,
+                                on_binned=on_binned, sample_footprint=sample_footprint,
+                                random_seed=random_seed)
 
     @staticmethod
     @filter_wrapper
@@ -604,6 +548,7 @@ class ImageFilter:
     @staticmethod
     @filter_wrapper
     def fft_highpass(in_array, sigma=(10, 10)):
+        from squirrel.library.image import fft_highpass
         return fft_highpass(in_array, sigma)
 
     @staticmethod

@@ -286,7 +286,9 @@ def clahe_on_image(
         gaussian_sigma=0.0,
         auto_mask=False,
         background_to_mean=False,
-        tile_grid_in_pixels=False
+        tile_grid_in_pixels=False,
+        backend="opencv",
+        histogram_bins=None
 ):
     image = np.asarray(image)
     if image.ndim != 2 or image.dtype not in (np.dtype('uint8'), np.dtype('uint16')):
@@ -298,11 +300,23 @@ def clahe_on_image(
             'normalization_method="quantile", cast_dtype="uint8").'
         )
 
-    if tile_grid_in_pixels:
-        tile_grid_size = (np.array(image.shape) / np.array(tile_grid_size)).astype(int).tolist()
+    if backend not in ('opencv', 'skimage'):
+        raise ValueError('backend must be "opencv" or "skimage"')
+    if histogram_bins is not None:
+        if backend != 'skimage':
+            raise ValueError('histogram_bins requires backend="skimage"')
+        if (not isinstance(histogram_bins, (int, np.integer)) or
+                isinstance(histogram_bins, (bool, np.bool_)) or histogram_bins < 2):
+            raise ValueError('histogram_bins must be an integer >= 2')
+    if not np.isfinite(clip_limit) or clip_limit < 0:
+        raise ValueError('clip_limit must be finite and nonnegative')
+    if backend == 'skimage' and clip_limit > 1:
+        raise ValueError('skimage clip_limit must be in [0, 1]')
 
-    from cv2 import createCLAHE
-    clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size) 
+    if tile_grid_in_pixels:
+        if backend == 'opencv':
+            tile_grid_size = (np.array(image.shape) / np.array(tile_grid_size)).astype(int).tolist()
+        # skimage kernel_size already specifies tile dimensions in pixels.
 
     mask = None
     if auto_mask:
@@ -314,7 +328,22 @@ def clahe_on_image(
         # Only make a shallow copy in this case
         tmp_image = image
 
-    clahe_filtered = clahe.apply(tmp_image)
+    if backend == 'opencv':
+        from cv2 import createCLAHE
+        clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tuple(tile_grid_size))
+        clahe_filtered = clahe.apply(tmp_image)
+    else:
+        from skimage.exposure import equalize_adapthist
+        if tile_grid_in_pixels:
+            kernel_size = tuple(tile_grid_size)
+        else:
+            # OpenCV-style tile counts translated to approximate pixel dimensions.
+            kernel_size = tuple(max(1, int(np.ceil(dim / count)))
+                                for dim, count in zip(image.shape, tile_grid_size))
+        equalized = equalize_adapthist(tmp_image, kernel_size=kernel_size,
+                                      clip_limit=clip_limit,
+                                      nbins=histogram_bins if histogram_bins is not None else 256)
+        clahe_filtered = np.rint(equalized * np.iinfo(image.dtype).max).astype(image.dtype)
     dtype_in = clahe_filtered.dtype
 
     if auto_mask:

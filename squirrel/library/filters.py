@@ -292,6 +292,22 @@ class ImageFilter:
                         raise ValueError('sigma must be a scalar or a pair of positive finite numbers')
                     if not np.issubdtype(sigma.dtype, np.number) or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
                         raise ValueError('sigma must contain positive finite numbers')
+                elif name == 'clahe':
+                    backend = parameters.get('backend', 'opencv')
+                    bins = parameters.get('histogram_bins')
+                    limit = parameters.get('clip_limit', 3.0)
+                    if backend not in ('opencv', 'skimage'):
+                        raise ValueError('backend must be "opencv" or "skimage"')
+                    if bins is not None:
+                        if backend != 'skimage':
+                            raise ValueError('histogram_bins requires backend="skimage"')
+                        if (not isinstance(bins, (int, np.integer)) or
+                                isinstance(bins, (bool, np.bool_)) or bins < 2):
+                            raise ValueError('histogram_bins must be an integer >= 2')
+                    if not isinstance(limit, (int, float, np.integer, np.floating)) or not np.isfinite(limit) or limit < 0:
+                        raise ValueError('clip_limit must be finite and nonnegative')
+                    if backend == 'skimage' and limit > 1:
+                        raise ValueError('skimage clip_limit must be in [0, 1]')
                 elif name == 'median':
                     radius = parameters.get('radius')
                     footprint = parameters.get('footprint')
@@ -502,11 +518,13 @@ class ImageFilter:
     @staticmethod
     @filter_wrapper
     def clahe(in_array, clip_limit=3.0, tile_grid_size=(127, 127), invert_output=False,
-              auto_mask=False, background_to_mean=False, tile_grid_in_pixels=False):
+              auto_mask=False, background_to_mean=False, tile_grid_in_pixels=False,
+              backend="opencv", histogram_bins=None):
         from squirrel.library.normalization import clahe_on_image
         return clahe_on_image(in_array, clip_limit=clip_limit, tile_grid_size=tile_grid_size,
                               invert_output=invert_output, auto_mask=auto_mask,
-                              background_to_mean=background_to_mean, tile_grid_in_pixels=tile_grid_in_pixels)
+                              background_to_mean=background_to_mean, tile_grid_in_pixels=tile_grid_in_pixels,
+                              backend=backend, histogram_bins=histogram_bins)
 
     @staticmethod
     @filter_wrapper

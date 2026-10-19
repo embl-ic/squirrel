@@ -345,3 +345,23 @@ along Z. `anchors` must remain `(0.0, 1.0)` and `normalization_range`
 is not supported for this method. Constant images or peaks with no
 measurable half-maximum crossings return zeros. Strong charging may
 still cause the wrong peak to be selected; `peak_search_range` can help.
+
+### CLAHE backends and histogram bins
+
+The default `backend="opencv"` retains existing CLAHE behavior. Set
+`backend="skimage"` to use scikit-image CLAHE and specify `histogram_bins`
+(default 256). The scikit-image `clip_limit` is normalized to [0, 1] and
+**is not numerically equivalent** to OpenCV's `clip_limit`. For example:
+
+```python
+['clahe', {'backend': 'skimage', 'histogram_bins': 256,
+           'clip_limit': 0.01, 'tile_grid_in_pixels': True,
+           'tile_grid_size': [63, 63]}]
+```
+
+With `tile_grid_in_pixels=True`, the scikit-image backend uses the specified
+size as its kernel dimensions. Otherwise, `tile_grid_size` is interpreted as
+OpenCV-style tile counts and converted to approximate kernel dimensions.
+Scikit-image produces normalized floating-point output, which squirrel scales
+back to the original integer dtype. Its internal quantization may not preserve
+all 16-bit input levels, even when `histogram_bins=65536`.

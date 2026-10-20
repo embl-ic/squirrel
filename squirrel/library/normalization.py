@@ -27,9 +27,11 @@ def get_normalization_limits(image, method='minmax', quantiles=(0.01, 0.99), mas
     data = np.asarray(image)
     if mask is not None:
         mask = np.asarray(mask)
-        if mask.shape != data.shape or mask.dtype.kind != 'b':
-            raise ValueError('mask must be boolean and match image shape')
-        data = data[mask]
+        if mask.shape != data.shape:
+            raise ValueError('mask must match image shape')
+        if mask.dtype.kind not in 'biu':
+            raise TypeError('mask must be boolean or integer')
+        data = data[mask.astype(bool)]
     data = data[np.isfinite(data)]
     if ignore_zeros:
         data = data[data != 0]

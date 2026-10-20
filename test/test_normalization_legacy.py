@@ -25,6 +25,16 @@ class TestNormalizationLegacy(unittest.TestCase):
         np.testing.assert_array_equal(result, [0, 0, 127, 255, 0])
         self.assertEqual(result.dtype, np.dtype('uint8'))
 
+    def test_norm_full_range_uint8_mask_compatibility(self):
+        print('Testing norm_full_range: uint8 masks from elastix auto masking')
+        image = np.array([0, 10, 20, 30, 100], dtype=np.uint16)
+        expected = np.array([0, 0, 127, 255, 0], dtype=np.uint8)
+        for foreground in (1, 255):
+            with self.subTest(foreground=foreground):
+                mask = np.array([0, foreground, foreground, foreground, 0], dtype=np.uint8)
+                result = norm_full_range(image, (0., 1.), mask=mask, cast_8bit=True)
+                np.testing.assert_array_equal(result, expected)
+
     def test_norm_full_range_default_anchors(self):
         print('Testing norm_full_range: default quantile anchors')
         image = np.arange(101, dtype='uint8')

@@ -129,3 +129,65 @@ class TestHydraNamedMetadata(unittest.TestCase):
         ])
         with self.assertRaisesRegex(ValueError, 'Unexpected unit'):
             extract_hydra_metadata(self.path, fields=['slice_thickness'])
+
+
+class TestHydraYamlCli(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+        self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.path = Path(self.tmpdir.name) / 'sample.tif'
+        xml = ('<Metadata><BinaryResult><PixelSize><X>7e-9</X>'
+               '<Y>8e-9</Y></PixelSize></BinaryResult>'
+               '<CustomSectionGroup><CustomSection scope="VoxelSizeInfo">'
+               '<VoxelSizeInfo><VoxelZ>15 nm</VoxelZ></VoxelSizeInfo>'
+               '</CustomSection></CustomSectionGroup></Metadata>')
+        tifffile.imwrite(self.path, [[1, 2], [3, 4]], extratags=[
+            (0x877B, 's', 0, xml, False),
+        ])
+
+    def test_save_hydra_metadata_roundtrip(self):
+        print('Testing save_hydra_metadata: YAML roundtrip')
+        import yaml
+        from squirrel.library.hydra import save_hydra_metadata
+
+        metadata = {'pixel_size_x': {'value': 7.0, 'unit': 'nm'}}
+        output = Path(self.tmpdir.name) / 'result.yaml'
+        save_hydra_metadata(metadata, output)
+        self.assertEqual(yaml.safe_load(output.read_text()), metadata)
+
+    def test_extract_tif_metadata_cli_full_and_resolution(self):
+        print('Testing extract_tif_metadata: complete and preset exports')
+        import sys
+        from unittest.mock import patch
+        import yaml
+        from squirrel.hydra import extract_tif_metadata
+
+        output = Path(self.tmpdir.name) / 'result.yaml'
+        for options in ([], ['--preset', 'resolution'],
+                        ['--fields', 'pixel_size_x', 'slice_thickness'],
+                        ['--preset', 'resolution', '--fields', 'pixel_size_x']):
+            with self.subTest(options=options):
+                with patch.object(sys, 'argv', ['sq-hydra-extract_tif_metadata',
+                                                str(self.path), str(output)] + options):
+                    extract_tif_metadata()
+                result = yaml.safe_load(output.read_text())
+                if options:
+                    self.assertAlmostEqual(result['pixel_size_x']['value'], 7.0)
+                else:
+                    self.assertIn('Metadata', result)
+
+    def test_extract_tif_metadata_cli_invalid_field(self):
+        print('Testing extract_tif_metadata: invalid field is rejected')
+        import sys
+        from unittest.mock import patch
+        from squirrel.hydra import extract_tif_metadata
+
+        output = Path(self.tmpdir.name) / 'result.yaml'
+        with patch.object(sys, 'argv', ['sq-hydra-extract_tif_metadata',
+                                        str(self.path), str(output),
+                                        '--fields', 'invalid']):
+            with self.assertRaisesRegex(ValueError, 'Unknown Hydra metadata field'):
+                extract_tif_metadata()
+        self.assertFalse(output.exists())

@@ -173,6 +173,16 @@ def extract_hydra_metadata(
     }
 
 
+def save_hydra_metadata(metadata: dict, out_filepath: str | Path) -> None:
+    """Save a metadata dictionary as human-readable YAML."""
+    import yaml
+
+    out_filepath = Path(out_filepath).expanduser()
+
+    with out_filepath.open('w', encoding='utf-8') as file:
+        yaml.safe_dump(metadata, file, sort_keys=False, allow_unicode=True)
+
+
 def _extract_origin_and_shape(
     tiff_path: Path,
 ) -> tuple[list[float], list[int]]:

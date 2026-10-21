@@ -27,9 +27,11 @@ def get_normalization_limits(image, method='minmax', quantiles=(0.01, 0.99), mas
     data = np.asarray(image)
     if mask is not None:
         mask = np.asarray(mask)
-        if mask.shape != data.shape or mask.dtype.kind != 'b':
-            raise ValueError('mask must be boolean and match image shape')
-        data = data[mask]
+        if mask.shape != data.shape:
+            raise ValueError('mask must match image shape')
+        if mask.dtype.kind not in 'biu':
+            raise TypeError('mask must be boolean or integer')
+        data = data[mask.astype(bool)]
     data = data[np.isfinite(data)]
     if ignore_zeros:
         data = data[data != 0]
@@ -42,10 +44,73 @@ def get_normalization_limits(image, method='minmax', quantiles=(0.01, 0.99), mas
     return float(low), float(high)
 
 
+def get_histogram_peak(image, smoothing_sigma=3.0, search_range=None,
+                       bins=256, mask=None, ignore_zeros=False):
+    """Estimate dominant histogram mode and full width at half maximum.
+
+    Return None if the selected data or peak width is degenerate.
+    """
+    from scipy.ndimage import gaussian_filter1d
+
+    if not np.isfinite(smoothing_sigma) or smoothing_sigma < 0:
+        raise ValueError('peak_smoothing_sigma must be finite and nonnegative')
+    if isinstance(bins, (bool, np.bool_)) or not isinstance(bins, (int, np.integer)) or bins < 3:
+        raise ValueError('peak_bins must be an integer >= 3')
+    if search_range is not None:
+        search_range = _validate_pair(search_range, 'peak_search_range')
+
+    data = np.asarray(image)
+    if mask is not None:
+        mask = np.asarray(mask)
+        if mask.shape != data.shape or mask.dtype.kind != 'b':
+            raise ValueError('mask must be boolean and match image shape')
+        data = data[mask]
+    data = data[np.isfinite(data)]
+    if ignore_zeros:
+        data = data[data != 0]
+    if data.size == 0 or np.min(data) == np.max(data):
+        return None
+
+    hist, edges = np.histogram(data, bins=bins)
+    hist = gaussian_filter1d(hist.astype(np.float64), smoothing_sigma)
+    centers = (edges[:-1] + edges[1:]) / 2
+    eligible = np.ones(centers.shape, dtype=bool)
+    if search_range is not None:
+        eligible = (centers >= search_range[0]) & (centers <= search_range[1])
+    if not np.any(eligible):
+        return None
+    peak_index = np.argmax(np.where(eligible, hist, -np.inf))
+    peak_height = hist[peak_index]
+    half_height = peak_height / 2
+
+    left = peak_index
+    while left > 0 and hist[left] >= half_height:
+        left -= 1
+    right = peak_index
+    while right < len(hist) - 1 and hist[right] >= half_height:
+        right += 1
+    if left == 0 and hist[left] >= half_height:
+        return None
+    if right == len(hist) - 1 and hist[right] >= half_height:
+        return None
+    if left == peak_index or right == peak_index:
+        return None
+
+    left_crossing = np.interp(half_height, hist[left:left + 2], centers[left:left + 2])
+    right_crossing = np.interp(half_height, hist[right - 1:right + 1][::-1],
+                               centers[right - 1:right + 1][::-1])
+    width = right_crossing - left_crossing
+    if not np.isfinite(width) or width <= 0:
+        return None
+    return float(centers[peak_index]), float(width)
+
+
 def normalize_image(image, method='minmax', quantiles=(0.01, 0.99),
                     normalization_range=None, anchors=(0.0, 1.0),
                     output_dtype='float32', mask=None, ignore_zeros=False,
-                    keep_zeros=False):
+                    keep_zeros=False, peak_target=0.5,
+                    peak_width_target=0.15, peak_smoothing_sigma=3.0,
+                    peak_search_range=None):
     """Linearly map input limits to fractional output anchors, clipping to dtype range.
 
     Integer outputs use their full dtype range; floating outputs use [0, 1].
@@ -57,11 +122,35 @@ def normalize_image(image, method='minmax', quantiles=(0.01, 0.99),
     if dtype.kind not in 'fiu':
         raise TypeError('output_dtype must be a real numeric dtype')
     anchors = _validate_pair(anchors, 'anchors', unit=True)
-    if method not in ('minmax', 'quantile'):
+    if method not in ('minmax', 'quantile', 'peak'):
         raise ValueError(f'Unknown normalization method: {method!r}')
     _validate_pair(quantiles, 'quantiles', unit=True)
     if not isinstance(keep_zeros, (bool, np.bool_)):
         raise TypeError('keep_zeros must be boolean')
+    if method == 'peak':
+        if normalization_range is not None:
+            raise ValueError('normalization_range is not supported for peak normalization')
+        if anchors != (0.0, 1.0):
+            raise ValueError('anchors are not supported for peak normalization')
+        if not np.isfinite(peak_target) or not 0 <= peak_target <= 1:
+            raise ValueError('peak_target must lie in [0, 1]')
+        if not np.isfinite(peak_width_target) or peak_width_target <= 0:
+            raise ValueError('peak_width_target must be positive and finite')
+        peak = get_histogram_peak(data, smoothing_sigma=peak_smoothing_sigma,
+                                  search_range=peak_search_range, mask=mask,
+                                  ignore_zeros=ignore_zeros)
+        if peak is None:
+            return np.zeros(data.shape, dtype=dtype)
+        center, width = peak
+        fraction = (data.astype(np.float64) - center) * (peak_width_target / width) + peak_target
+        fraction = np.clip(np.nan_to_num(fraction, nan=0., posinf=1., neginf=0.), 0, 1)
+        if dtype.kind in 'iu':
+            info = np.iinfo(dtype)
+            fraction = fraction * (float(info.max) - float(info.min)) + float(info.min)
+        result = fraction.astype(dtype)
+        if keep_zeros:
+            result[data == 0] = 0
+        return result
     limits = (_validate_pair(normalization_range, 'normalization_range')
               if normalization_range is not None else
               get_normalization_limits(data, method, quantiles, mask, ignore_zeros))
@@ -199,7 +288,9 @@ def clahe_on_image(
         gaussian_sigma=0.0,
         auto_mask=False,
         background_to_mean=False,
-        tile_grid_in_pixels=False
+        tile_grid_in_pixels=False,
+        backend="opencv",
+        histogram_bins=None
 ):
     image = np.asarray(image)
     if image.ndim != 2 or image.dtype not in (np.dtype('uint8'), np.dtype('uint16')):
@@ -211,11 +302,23 @@ def clahe_on_image(
             'normalization_method="quantile", cast_dtype="uint8").'
         )
 
-    if tile_grid_in_pixels:
-        tile_grid_size = (np.array(image.shape) / np.array(tile_grid_size)).astype(int).tolist()
+    if backend not in ('opencv', 'skimage'):
+        raise ValueError('backend must be "opencv" or "skimage"')
+    if histogram_bins is not None:
+        if backend != 'skimage':
+            raise ValueError('histogram_bins requires backend="skimage"')
+        if (not isinstance(histogram_bins, (int, np.integer)) or
+                isinstance(histogram_bins, (bool, np.bool_)) or histogram_bins < 2):
+            raise ValueError('histogram_bins must be an integer >= 2')
+    if not np.isfinite(clip_limit) or clip_limit < 0:
+        raise ValueError('clip_limit must be finite and nonnegative')
+    if backend == 'skimage' and clip_limit > 1:
+        raise ValueError('skimage clip_limit must be in [0, 1]')
 
-    from cv2 import createCLAHE
-    clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size) 
+    if tile_grid_in_pixels:
+        if backend == 'opencv':
+            tile_grid_size = (np.array(image.shape) / np.array(tile_grid_size)).astype(int).tolist()
+        # skimage kernel_size already specifies tile dimensions in pixels.
 
     mask = None
     if auto_mask:
@@ -227,7 +330,22 @@ def clahe_on_image(
         # Only make a shallow copy in this case
         tmp_image = image
 
-    clahe_filtered = clahe.apply(tmp_image)
+    if backend == 'opencv':
+        from cv2 import createCLAHE
+        clahe = createCLAHE(clipLimit=clip_limit, tileGridSize=tuple(tile_grid_size))
+        clahe_filtered = clahe.apply(tmp_image)
+    else:
+        from skimage.exposure import equalize_adapthist
+        if tile_grid_in_pixels:
+            kernel_size = tuple(tile_grid_size)
+        else:
+            # OpenCV-style tile counts translated to approximate pixel dimensions.
+            kernel_size = tuple(max(1, int(np.ceil(dim / count)))
+                                for dim, count in zip(image.shape, tile_grid_size))
+        equalized = equalize_adapthist(tmp_image, kernel_size=kernel_size,
+                                      clip_limit=clip_limit,
+                                      nbins=histogram_bins if histogram_bins is not None else 256)
+        clahe_filtered = np.rint(equalized * np.iinfo(image.dtype).max).astype(image.dtype)
     dtype_in = clahe_filtered.dtype
 
     if auto_mask:

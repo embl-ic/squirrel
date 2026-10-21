@@ -242,3 +242,7 @@ fabric.properties
 # vscode
 .vscode/
 settings.json
+
+# Data
+*.ome.zarr
+

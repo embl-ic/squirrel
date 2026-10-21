@@ -54,6 +54,45 @@ def _read_fei_metadata_root(tiff_path: Path) -> ET.Element:
     return ET.fromstring(xml_data)
 
 
+
+def _xml_element_to_dict(element: ET.Element):
+    """Convert an XML element to JSON-compatible Python values.
+
+    Attributes use ``@`` prefixes and mixed text uses ``#text``.
+    Repeated child tags become lists. Leaf text is preserved as a string.
+    """
+    result = {f"@{key}": value for key, value in element.attrib.items()}
+
+    for child in element:
+        value = _xml_element_to_dict(child)
+
+        if child.tag not in result:
+            result[child.tag] = value
+        elif isinstance(result[child.tag], list):
+            result[child.tag].append(value)
+        else:
+            result[child.tag] = [result[child.tag], value]
+
+    text = (element.text or "").strip()
+
+    if result:
+        if text:
+            result["#text"] = text
+        return result
+
+    return text if text else None
+
+
+def read_hydra_metadata(tiff_path: str | Path) -> dict:
+    """Read the complete FEI/Hydra XML metadata from a TIFF file.
+
+    The XML root tag is retained as the outer dictionary key. Values are
+    kept as strings to avoid guessing the types or units of raw metadata.
+    """
+    root = _read_fei_metadata_root(Path(tiff_path).expanduser())
+    return {root.tag: _xml_element_to_dict(root)}
+
+
 def _extract_origin_and_shape(
     tiff_path: Path,
 ) -> tuple[list[float], list[int]]:

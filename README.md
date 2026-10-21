@@ -72,6 +72,7 @@ pip install pyvsnr
 
 ## Documentation
 
+- [Hydra TIFF metadata](docs/hydra.md) — Inspect FEI/Hydra metadata, export YAML, select fields and presets, and extract dataset geometry.
 - [Image filtering](docs/filters.md) — Filter reference, min–max and quantile normalization, pipelines, stack processing, and parallel execution.
 
 ## Usage

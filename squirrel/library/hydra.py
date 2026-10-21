@@ -93,6 +93,86 @@ def read_hydra_metadata(tiff_path: str | Path) -> dict:
     return {root.tag: _xml_element_to_dict(root)}
 
 
+# Named fields are extracted from the original XML to retain explicit units.
+# Values are returned in the units declared here.
+HYDRA_METADATA_FIELDS = {
+    'pixel_size_x': {'path': './BinaryResult/PixelSize/X', 'unit': 'nm', 'scale': 1e9},
+    'pixel_size_y': {'path': './BinaryResult/PixelSize/Y', 'unit': 'nm', 'scale': 1e9},
+    'slice_thickness': {'path': 'VoxelSizeInfo/VoxelZ', 'unit': 'nm'},
+    'stage_x': {'path': './StageSettings/StagePosition/X', 'unit': 'm'},
+    'stage_y': {'path': './StageSettings/StagePosition/Y', 'unit': 'm'},
+    'pretilt_angle': {'path': './Optics/SamplePreTiltAngle', 'unit': 'rad'},
+}
+
+HYDRA_METADATA_PRESETS = {
+    'resolution': ('pixel_size_x', 'pixel_size_y', 'slice_thickness'),
+    'geometry': ('pixel_size_x', 'pixel_size_y', 'stage_x', 'stage_y', 'pretilt_angle'),
+}
+
+
+def _read_named_hydra_field(root: ET.Element, field: str) -> float | None:
+    """Read one named field, returning None when it is absent."""
+    definition = HYDRA_METADATA_FIELDS[field]
+    path = definition['path']
+
+    if path.startswith('VoxelSizeInfo/'):
+        # Voxel sizes are stored in a scoped custom XML section.
+        element = root.find(
+            "./CustomSectionGroup/CustomSection[@scope='VoxelSizeInfo']/" + path
+        )
+    else:
+        element = root.find(path)
+
+    if element is None or element.text is None or not element.text.strip():
+        return None
+
+    value = element.text.strip()
+
+    if path.startswith('VoxelSizeInfo/'):
+        # These fields contain an explicit unit, e.g. '15 nm'.
+        parts = value.split()
+        if len(parts) != 2 or parts[1] != definition['unit']:
+            raise ValueError(f"Unexpected unit for {field}: {value!r}")
+        value = parts[0]
+
+    try:
+        return float(value) * definition.get('scale', 1.0)
+    except ValueError as exc:
+        raise ValueError(f"Invalid numeric metadata for {field}: {value!r}") from exc
+
+
+def extract_hydra_metadata(
+    tiff_path: str | Path,
+    preset: str | None = None,
+    fields: list[str] | tuple[str, ...] | None = None,
+) -> dict:
+    """Extract named Hydra metadata fields with values and units.
+
+    Preset fields and explicit fields are combined in insertion order.
+    Missing fields have a null value; unknown field names raise ValueError.
+    """
+    if preset is not None and preset not in HYDRA_METADATA_PRESETS:
+        raise ValueError(f"Unknown Hydra metadata preset: {preset!r}")
+
+    selected = list(HYDRA_METADATA_PRESETS[preset]) if preset else []
+    selected.extend(fields or [])
+    selected = list(dict.fromkeys(selected))
+
+    for field in selected:
+        if field not in HYDRA_METADATA_FIELDS:
+            raise ValueError(f"Unknown Hydra metadata field: {field!r}")
+
+    root = _read_fei_metadata_root(Path(tiff_path).expanduser())
+
+    return {
+        field: {
+            'value': _read_named_hydra_field(root, field),
+            'unit': HYDRA_METADATA_FIELDS[field]['unit'],
+        }
+        for field in selected
+    }
+
+
 def _extract_origin_and_shape(
     tiff_path: Path,
 ) -> tuple[list[float], list[int]]:

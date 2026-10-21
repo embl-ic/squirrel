@@ -170,7 +170,7 @@ class TestHydraYamlCli(unittest.TestCase):
                         ['--preset', 'resolution', '--fields', 'pixel_size_x']):
             with self.subTest(options=options):
                 with patch.object(sys, 'argv', ['sq-hydra-extract_tif_metadata',
-                                                str(self.path), str(output)] + options):
+                                                str(self.path), '-o', str(output)] + options):
                     extract_tif_metadata()
                 result = yaml.safe_load(output.read_text())
                 if options:
@@ -186,7 +186,7 @@ class TestHydraYamlCli(unittest.TestCase):
 
         output = Path(self.tmpdir.name) / 'result.yaml'
         with patch.object(sys, 'argv', ['sq-hydra-extract_tif_metadata',
-                                        str(self.path), str(output),
+                                        str(self.path), '-o', str(output),
                                         '--fields', 'invalid']):
             with self.assertRaisesRegex(ValueError, 'Unknown Hydra metadata field'):
                 extract_tif_metadata()

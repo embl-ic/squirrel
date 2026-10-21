@@ -44,7 +44,10 @@ def extract_tif_metadata():
         description='Export Hydra TIFF metadata as YAML.'
     )
     parser.add_argument('input_tif', help='Input Hydra TIFF file')
-    parser.add_argument('output_yaml', help='Output YAML file')
+    parser.add_argument(
+        '-o', '--out_filepath',
+        help='Save YAML to this file (default: print to console)'
+    )
     parser.add_argument(
         '--preset', choices=sorted(HYDRA_METADATA_PRESETS),
         help='Export the named field preset'
@@ -63,4 +66,8 @@ def extract_tif_metadata():
     else:
         metadata = read_hydra_metadata(args.input_tif)
 
-    save_hydra_metadata(metadata, args.output_yaml)
+    if args.out_filepath is not None:
+        save_hydra_metadata(metadata, args.out_filepath)
+    else:
+        import yaml
+        print(yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True), end='')

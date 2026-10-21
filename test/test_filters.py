@@ -1,6 +1,8 @@
 import unittest
 import warnings
 import sys
+import os
+import tempfile
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 import numpy as np
@@ -49,11 +51,13 @@ class TestFilterWorkflowDtype(unittest.TestCase):
             with self.subTest(pipeline=pipeline):
                 zarr_module.OMEZarrStore.create.reset_mock()
                 store.reset_mock()
-                with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
-                     patch('squirrel.library.io.get_filetype', return_value='ome_zarr'), \
-                     patch.dict(sys.modules, {'squirrel.library.ome_zarr': zarr_module}):
-                    filter_2d_workflow('input', 'output.ome.zarr', filters=pipeline,
-                                       batch_size=2, n_workers=1)
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    out_path = os.path.join(tmp_dir, 'output.ome.zarr')
+                    with patch('squirrel.library.io.load_data_handle', return_value=(stack, stack.shape)), \
+                         patch('squirrel.library.io.get_filetype', return_value='ome_zarr'), \
+                         patch.dict(sys.modules, {'squirrel.library.ome_zarr': zarr_module}):
+                        filter_2d_workflow('input', out_path, filters=pipeline,
+                                           batch_size=2, n_workers=1)
                 self.assertEqual(zarr_module.OMEZarrStore.create.call_args.kwargs['dtype'], expected_dtype)
                 self.assertEqual(store.write.call_count, 2)
                 for call in store.write.call_args_list:
@@ -130,8 +134,15 @@ class TestImageFilter(unittest.TestCase):
         print('Testing zero mask exclusion from normalization ...')
         from squirrel.library.filters import ImageFilter
         img = np.array([0., 10., 20.])
-        result = ImageFilter(img).get_filtered([['same', dict(keep_zeros=True, normalize=True)]])
+        result = ImageFilter(img).get_filtered([
+            ['same', dict(keep_zeros=True, ignore_zeros=True, normalize=True)]
+        ])
         np.testing.assert_allclose(result, [0, 0, 1])
+
+        included = ImageFilter(img).get_filtered([
+            ['same', dict(keep_zeros=True, ignore_zeros=False, normalize=True)]
+        ])
+        np.testing.assert_allclose(included, [0, 0.5, 1])
 
     def test_subtract_preserves_sign(self):
         print('Testing signed arithmetic in subtract mode ...')
@@ -141,7 +152,7 @@ class TestImageFilter(unittest.TestCase):
         np.testing.assert_array_equal(result, [0, 0])
         self.assertEqual(result.dtype.kind, 'f')
 
-    def test_safe_cast(self):
+    def testsafe_cast(self):
         print('Testing safe integer casting ...')
         from squirrel.library.filters import ImageFilter
         img = np.array([-10., 100., 70000.])
@@ -193,7 +204,7 @@ class TestFilters(unittest.TestCase):
 
     def test_fft_constant(self):
         print('Testing fft_highpass on a constant image ...')
-        from squirrel.library.filters import fft_highpass
+        from squirrel.library.image import fft_highpass
         img = np.ones((12, 15))
         result = fft_highpass(img, (2, 3))
         self.assertLess(np.max(np.abs(result)), 1e-12)
@@ -881,3 +892,274 @@ class TestFilterMultiprocessing(unittest.TestCase):
             for label in list(timings)[1:]:
                 print(f'    Speedup ({label}): {baseline / timings[label]:.2f}x')
         # No performance assertions: execution times are hardware-dependent.
+
+
+class TestRescaleDtype(unittest.TestCase):
+
+    def setUp(self):
+        import warnings
+        warnings.simplefilter('ignore', category=Warning)
+        from squirrel.library.filters import ImageFilter
+        self.ImageFilter = ImageFilter
+
+    def test_rescale_dtype_fixed_uint16_to_uint8(self):
+        print('Testing rescale_dtype: fixed full-range mapping uint16 to uint8')
+        image = np.array([[0, 1000, 32768, 65535]], dtype=np.uint16)
+        result = self.ImageFilter(image).get_filtered([['same', {'rescale_dtype': 'uint8'}]])
+        expected = np.array([[0, 4, 128, 255]], dtype=np.uint8)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_rescale_dtype_fixed_uint8_to_uint16(self):
+        print('Testing rescale_dtype: fixed full-range mapping uint8 to uint16')
+        image = np.array([[0, 1, 128, 255]], dtype=np.uint8)
+        result = self.ImageFilter(image).get_filtered([['same', {'rescale_dtype': 'uint16'}]])
+        np.testing.assert_array_equal(result, image.astype(np.uint16) * 257)
+
+    def test_rescale_dtype_independent_of_slice_range(self):
+        print('Testing rescale_dtype: same input intensity maps identically in different slices')
+        stack = np.array([[[0, 32768]], [[32768, 65535]]], dtype=np.uint16)
+        result = self.ImageFilter(stack).get_filtered_stack([['same', {'rescale_dtype': 'uint8'}]],
+                                                       progress=False)
+        self.assertEqual(result[0, 0, 1], result[1, 0, 0])
+        self.assertEqual(result[0, 0, 1], 128)
+
+    def test_rescale_dtype_rejects_conflicts_and_invalid_types(self):
+        print('Testing rescale_dtype: actionable errors for conflicting options and types')
+        image = np.array([[0, 65535]], dtype=np.uint16)
+        for params, expected in (
+                ({'rescale_dtype': 'uint8', 'normalize': True}, 'normalize=True'),
+                ({'rescale_dtype': 'uint8', 'cast_dtype': 'uint8'}, 'cast_dtype'),
+                ({'rescale_dtype': 'float32'}, 'uint8 or uint16')):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex((TypeError, ValueError), expected):
+                    self.ImageFilter(image).get_filtered([['same', params]])
+        for dtype in (np.float32, np.int16, np.uint32):
+            with self.subTest(dtype=dtype):
+                with self.assertRaisesRegex(TypeError, 'input/output'):
+                    self.ImageFilter(image.astype(dtype)).get_filtered(
+                        [['same', {'rescale_dtype': 'uint8'}]])
+
+
+class TestExtractedImageAlgorithms(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_fft_highpass_matches_pipeline(self):
+        print('Testing standalone FFT high-pass matches ImageFilter ...')
+        from squirrel.library.image import fft_highpass
+        from squirrel.library.filters import ImageFilter
+
+        image = np.arange(80, dtype=np.uint16).reshape(8, 10)
+        expected = ImageFilter.fft_highpass(image, sigma=(2, 4))
+        np.testing.assert_array_equal(fft_highpass(image, sigma=(2, 4)), expected)
+
+    def test_median_filter_2d_matches_pipeline(self):
+        print('Testing standalone median matches ImageFilter ...')
+        from squirrel.library.image import median_filter_2d
+        from squirrel.library.filters import ImageFilter
+
+        image = np.arange(81, dtype=np.uint8).reshape(9, 9)
+        for kwargs in ({'radius': 1}, {'radius': (2, 1), 'elliptical_footprint': True},
+                       {'radius': 1, 'sample_footprint': 3, 'random_seed': 7},
+                       {'radius': 1, 'on_binned': 2},
+                       {'footprint': np.ones((3, 3), dtype=bool)}):
+            with self.subTest(kwargs=kwargs):
+                expected = ImageFilter.median(image, **kwargs)
+                actual = median_filter_2d(image, **kwargs)
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_standalone_validation(self):
+        print('Testing standalone image algorithm input validation ...')
+        from squirrel.library.image import fft_highpass, median_filter_2d
+
+        with self.assertRaisesRegex(ValueError, 'positive finite'):
+            fft_highpass(np.zeros((5, 5)), sigma=-1)
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            median_filter_2d(np.zeros((5, 5)))
+
+class TestSharedDtypeUtilities(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_shared_dtype_public_imports(self):
+        print('Testing shared dtype utilities are publicly accessible from filters and dtype ...')
+        from squirrel.library import dtype as dtype_utils
+        from squirrel.library import filters
+
+        self.assertIs(filters.working_dtype, dtype_utils.working_dtype)
+        self.assertIs(filters.safe_cast, dtype_utils.safe_cast)
+        self.assertIs(filters.rescale_integer_dtype, dtype_utils.rescale_integer_dtype)
+
+    def test_shared_dtype_cast_and_rescale(self):
+        print('Testing shared dtype casting and fixed-range rescaling ...')
+        from squirrel.library.dtype import safe_cast, rescale_integer_dtype, working_dtype
+
+        np.testing.assert_array_equal(
+            safe_cast(np.array([-10, 20, 300, np.nan]), 'uint8'),
+            np.array([0, 20, 255, 0], dtype=np.uint8))
+        np.testing.assert_array_equal(
+            rescale_integer_dtype(np.array([0, 32768, 65535], dtype=np.uint16), 'uint8'),
+            np.array([0, 128, 255], dtype=np.uint8))
+        self.assertEqual(working_dtype(np.zeros(2, dtype=np.uint16)), np.float32)
+        self.assertEqual(working_dtype(np.zeros(2, dtype=np.uint32)), np.float64)
+
+    def test_shared_dtype_rejects_unsupported_rescale(self):
+        print('Testing fixed-range rescaling rejects unsupported dtypes ...')
+        from squirrel.library.dtype import rescale_integer_dtype
+
+        with self.assertRaisesRegex(TypeError, 'uint8 and uint16'):
+            rescale_integer_dtype(np.array([1.0], dtype=np.float32), 'uint8')
+
+
+class TestSharedProcessingValidation(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_shared_validation_rejects_invalid_options(self):
+        print('Testing shared processing validation for direct calls and pipelines ...')
+        from squirrel.library.filters import ImageFilter
+
+        image = np.arange(4, dtype=np.uint8).reshape(2, 2)
+        cases = (
+            ({'filter_mode': 1}, TypeError, 'filter_mode'),
+            ({'filter_mode': 'multiply'}, ValueError, 'filter_mode'),
+            ({'clip': (2, 1)}, ValueError, 'clip'),
+            ({'normalization_range': (0, 1)}, ValueError, 'normalization_range'),
+            ({'normalization_method': 'quantile'}, ValueError, 'normalize=True'),
+            ({'normalize': True, 'quantiles': (0.9, 0.1)}, ValueError, 'quantiles'),
+            ({'normalize': True, 'anchors': (-1, 1)}, ValueError, 'anchors'),
+            ({'rescale_dtype': 'float32'}, TypeError, 'rescale_dtype'),
+            ({'rescale_dtype': 'invalid'}, ValueError, 'rescale_dtype'),
+            ({'rescale_dtype': 'uint8', 'normalize': True}, ValueError, 'normalize=True'),
+            ({'rescale_dtype': 'uint8', 'cast_dtype': 'uint8'}, ValueError, 'cast_dtype'),
+            ({'cast_dtype': 'invalid'}, ValueError, 'cast_dtype'),
+            ({'ignore_zeros': 1}, TypeError, 'ignore_zeros'),
+        )
+        for options, exception, message in cases:
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(exception, message):
+                    ImageFilter.validate_pipeline([['same', options]])
+                with self.assertRaisesRegex(exception, message):
+                    ImageFilter.same(image, **options)
+
+    def test_shared_validation_does_not_modify_parameters(self):
+        print('Testing shared processing validation preserves caller parameters ...')
+        from squirrel.library.filters import ImageFilter
+
+        options = {'clip': [0, 2], 'normalize': False}
+        ImageFilter.validate_pipeline([['same', options]])
+        self.assertEqual(options, {'clip': [0, 2], 'normalize': False})
+        np.testing.assert_array_equal(ImageFilter.same(np.array([0, 1, 3]), **options), [0, 1, 2])
+
+class TestFilterWorkflowResume(unittest.TestCase):
+
+    def test_tiff_resume_skips_completed_batches(self):
+        print('Testing TIFF batch checkpoint and resumption')
+        import json
+        import os
+        import tempfile
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        data = np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8)
+        filters = [['gaussian', {'sigma': 1}]]
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, 'output')
+            with patch('squirrel.library.io.load_data_handle', return_value=(data, data.shape)), \
+                    patch('squirrel.library.filters.ImageFilter.get_filtered_stack',
+                          return_value=data[:2]):
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False)
+                checkpoint_path = os.path.join(output, '.squirrel_filter_checkpoint.json')
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])
+                with patch('squirrel.library.filters.ImageFilter.get_filtered_stack') as process:
+                    filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                       n_workers=1, progress=False, resume=True)
+                    process.assert_not_called()
+                with self.assertRaises(FileExistsError):
+                    filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                       n_workers=1, progress=False)
+                with self.assertRaisesRegex(ValueError, 'checkpoint filters'):
+                    filter_2d_workflow('input', output, filters=[['gaussian', {'sigma': 2}]],
+                                       batch_size=2, n_workers=1, progress=False, resume=True)
+
+    def test_tiff_resume_recomputes_uncommitted_batch(self):
+        print('Testing resumption recomputes incomplete TIFF batches')
+        import json
+        import os
+        import tempfile
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        data = np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8)
+        filters = [['gaussian', {'sigma': 1}]]
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, 'output')
+            with patch('squirrel.library.io.load_data_handle', return_value=(data, data.shape)), \
+                    patch('squirrel.library.filters.ImageFilter.get_filtered_stack',
+                          return_value=data[:2]):
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False)
+                checkpoint_path = os.path.join(output, '.squirrel_filter_checkpoint.json')
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                checkpoint['completed_batches'] = [[0, 2]]
+                with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                    json.dump(checkpoint, f)
+                with patch('squirrel.library.filters.ImageFilter.get_filtered_stack',
+                           wraps=None) as process:
+                    process.return_value = data[2:4]
+                    filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                       n_workers=1, progress=False, resume=True)
+                    self.assertEqual(process.call_count, 1)
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])
+
+    def test_ome_zarr_resume_rewrites_uncommitted_batch(self):
+        print('Testing OME-Zarr resume and incomplete batch replacement')
+        import json
+        import os
+        import tempfile
+        from squirrel.workflows.volume import filter_2d_workflow
+
+        data = np.ones((4, 8, 8), dtype=np.uint16)
+        filters = [['gaussian', {'sigma': 1}]]
+        store = MagicMock()
+        store.shape.return_value = data.shape
+        store.dtype.return_value = data.dtype
+        store.metadata.levels = ['s0', 's1', 's2']
+        module = ModuleType('squirrel.library.ome_zarr')
+        module.OMEZarrStore = MagicMock(return_value=store)
+        module.OMEZarrStore.create.return_value = store
+
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, 'output.ome.zarr')
+            with patch.dict(sys.modules, {'squirrel.library.ome_zarr': module}), \
+                    patch('squirrel.library.io.load_data_handle', return_value=(data, data.shape)), \
+                    patch('squirrel.library.filters.ImageFilter.get_filtered_stack', return_value=data[:2]):
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False)
+                self.assertEqual(module.OMEZarrStore.create.call_count, 1)
+                checkpoint_path = os.path.join(output, '.squirrel_filter_checkpoint.json')
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])
+                self.assertEqual(checkpoint['output_dtype'], 'uint16')
+                checkpoint['completed_batches'] = [[0, 2]]
+                with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                    json.dump(checkpoint, f)
+
+                store.write.reset_mock()
+                filter_2d_workflow('input', output, filters=filters, batch_size=2,
+                                   n_workers=1, progress=False, resume=True)
+                module.OMEZarrStore.assert_called_once_with(output, mode='r+')
+                store.write.assert_called_once()
+                self.assertEqual(store.write.call_args.kwargs['require_empty'], False)
+                self.assertEqual(store.write.call_args.args[1], [2, 0, 0])
+                with open(checkpoint_path, encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.assertEqual(checkpoint['completed_batches'], [[0, 2], [2, 4]])

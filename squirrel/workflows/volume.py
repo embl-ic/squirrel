@@ -1,4 +1,6 @@
 import os.path
+import json
+import tempfile
 
 import numpy as np
 
@@ -549,8 +551,20 @@ def filter_2d_workflow(
         filters=None,
         batch_size=None,
         n_workers=1,
-        verbose=False
+        verbose=False,
+        progress=True,
+        save_intermediates=False,
+        resume=False
 ):
+    if not isinstance(resume, (bool, np.bool_)):
+        raise TypeError(f'resume must be a boolean, got {resume!r}')
+    if resume and batch_size is None:
+        raise ValueError('resume requires batch_size')
+    if not isinstance(save_intermediates, (bool, np.bool_)):
+        raise TypeError(f'save_intermediates must be a boolean, got {save_intermediates!r}')
+    if not isinstance(progress, (bool, np.bool_)):
+        raise TypeError(f'progress must be a boolean, got {progress!r}')
+
     if verbose:
         print(f'input_path = {input_path}')
         print(f'out_path = {out_path}')
@@ -559,6 +573,9 @@ def filter_2d_workflow(
         print(f'filters = {filters}')
         print(f'batch_size = {batch_size}')
         print(f'n_workers = {n_workers}')
+        print(f'progress = {progress}')
+        print(f'save_intermediates = {save_intermediates}')
+        print(f'resume = {resume}')
 
     from squirrel.library.filters import ImageFilter
     ImageFilter.validate_pipeline(filters)
@@ -580,65 +597,187 @@ def filter_2d_workflow(
     if stack_shape[0] < 1:
         raise ValueError('Cannot filter an empty stack')
 
+
+    checkpoint_path = os.path.join(os.fspath(out_path), '.squirrel_filter_checkpoint.json')
+    checkpoint = None
+    completed = set()
+    if batch_size is not None and out_filetype in ('dir', 'ome_zarr'):
+        expected = dict(version=1, input_path=os.path.abspath(os.fspath(input_path)),
+                        filters=filters, stack_shape=list(map(int, stack_shape)),
+                        batch_size=int(batch_size), save_intermediates=bool(save_intermediates))
+        if os.path.exists(checkpoint_path):
+            if not resume:
+                raise FileExistsError(f'Filtering checkpoint already exists: {checkpoint_path}; use resume=True')
+            with open(checkpoint_path, encoding='utf-8') as f:
+                checkpoint = json.load(f)
+            for field, value in expected.items():
+                if checkpoint.get(field) != value:
+                    raise ValueError(f'Cannot resume: checkpoint {field} does not match current run')
+            completed = {tuple(item) for item in checkpoint.get('completed_batches', [])}
+            valid = {(z, min(z + batch_size, stack_shape[0]))
+                     for z in range(0, stack_shape[0], batch_size)}
+            if not completed <= valid:
+                raise ValueError('Checkpoint contains invalid completed batches')
+        else:
+            if resume and os.path.exists(out_path) and os.listdir(out_path):
+                raise FileExistsError('Cannot resume: output directory exists without a checkpoint')
+            if not resume and os.path.exists(out_path) and os.listdir(out_path):
+                raise FileExistsError('Output directory is not empty; refusing to overwrite existing files')
+            checkpoint = dict(expected, completed_batches=[])
+
+    def save_checkpoint():
+        os.makedirs(out_path, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.squirrel_checkpoint_', dir=out_path)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(checkpoint, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, checkpoint_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    intermediate_root = f'{os.path.splitext(os.fspath(out_path))[0]}_intermediates'
+
+    def write_intermediates(intermediates, offset):
+        if not save_intermediates:
+            return
+        from squirrel.library.io import write_tif_stack
+        for index, intermediate_stack in enumerate(intermediates):
+            folder = os.path.join(intermediate_root, f'filter{index:02d}_{filters[index][0]}')
+            os.makedirs(folder, exist_ok=True)
+            previews = []
+            for intermediate in intermediate_stack:
+                values = intermediate.astype(np.float64)
+                low, high = values.min(), values.max()
+                if high == low:
+                    preview = np.zeros(values.shape, dtype=np.uint8)
+                else:
+                    preview = ((values - low) / (high - low) * 255).astype(np.uint8)
+                previews.append(preview)
+            write_tif_stack(previews, folder, id_offset=offset,
+                            slice_name='slice_{:05d}.tif')
+
+    def filter_batch(data, callback=None, show_progress=False):
+        result = ImageFilter(data).get_filtered_stack(
+            filters, n_workers=n_workers, progress=show_progress,
+            progress_callback=callback, return_intermediates=save_intermediates)
+        if save_intermediates:
+            return result
+        return result, None
+
+    if verbose:
+        print(f'Filtering stack with shape {stack_shape}, workers={n_workers}, batch_size={batch_size}')
+
     if batch_size is None:
 
-        imf = ImageFilter(stack_handle[:])
-        filtered_stack = imf.get_filtered_stack(filters, n_workers=n_workers)
+        filtered_stack, intermediates = filter_batch(stack_handle[:], show_progress=progress)
+        write_intermediates(intermediates, 0)
+        if verbose:
+            print(f'Writing filtered stack to {out_path} ...')
         write_stack(out_path, filtered_stack, key=out_key)
+        if verbose:
+            print('Filtering complete')
         return
 
-    # Filter the first batch before creating the output container: the pipeline
-    # may change dtype via casting, normalization, or arithmetic modes.
-    first_batch = ImageFilter(stack_handle[:min(batch_size, stack_shape[0])]).get_filtered_stack(
-        filters, n_workers=n_workers
-    )
-    output_dtype = first_batch.dtype
-    if out_filetype == 'ome_zarr':
-        if verbose:
-            print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {output_dtype}')
-        from squirrel.library.ome_zarr import OMEZarrStore
-        oz = OMEZarrStore.create(
-            path=out_path,
-            shape=stack_shape,
-            dtype=output_dtype,
-            chunks=(max(1, min(int(batch_size / 4), 128)), 256, 256),
-            downsample_factors=(2, 2),
-            shards=None,
-            overwrite=False
-        )
+    from tqdm.auto import tqdm
+    done_slices = sum(end - start for start, end in completed)
+    progress_bar = tqdm(total=stack_shape[0], initial=done_slices,
+                        desc='Filtering', unit='slice', disable=not progress)
 
-    def _write_batch(batch, id_offset, out_path):
-        out_filetype = get_filetype(out_path)
-        if out_filetype == 'dir':
-            from squirrel.library.io import write_tif_stack
-            write_tif_stack(batch, out_path, id_offset=id_offset, slice_name='slice_{:05d}.tif')
+    try:
+        # Filter the first batch before creating the output container: the pipeline
+        # may change dtype via casting, normalization, or arithmetic modes.
+        pending = [z for z in range(0, stack_shape[0], batch_size)
+                   if (z, min(z + batch_size, stack_shape[0])) not in completed]
+        if not pending:
+            if verbose:
+                print('All filtering batches are already complete')
             return
-        if out_filetype == 'ome_zarr':
-            oz.write(
-                0, [id_offset, 0, 0],
-                data=batch,
-                update_pyramid=True,
-                check_pyramid_alignment=True,
-                require_empty=True
+        first_z = pending[0]
+        first_batch, first_intermediates = filter_batch(
+            stack_handle[first_z:min(first_z + batch_size, stack_shape[0])],
+            callback=progress_bar.update)
+        output_dtype = first_batch.dtype
+        if out_filetype == 'ome_zarr' and checkpoint is not None:
+            # Store the dtype to detect incompatible output on restart.
+            if 'output_dtype' in checkpoint:
+                if np.dtype(checkpoint['output_dtype']) != output_dtype:
+                    raise ValueError('Cannot resume: checkpoint output dtype does not match filter result')
+            else:
+                checkpoint['output_dtype'] = np.dtype(output_dtype).name
+
+        if out_filetype == 'ome_zarr' and os.path.exists(out_path) and resume:
+            from squirrel.library.ome_zarr import OMEZarrStore
+            oz = OMEZarrStore(out_path, mode='r+')
+            if tuple(oz.shape(0)) != tuple(stack_shape):
+                raise ValueError('Cannot resume: OME-Zarr shape does not match input')
+            if np.dtype(oz.dtype(0)) != output_dtype:
+                raise ValueError('Cannot resume: OME-Zarr dtype does not match filter result')
+            if len(oz.metadata.levels) != 3:
+                raise ValueError('Cannot resume: OME-Zarr pyramid configuration differs')
+        elif out_filetype == 'ome_zarr':
+            if verbose:
+                print(f'Creating OME-Zarr container at {out_path} with shape {stack_shape} and dtype {output_dtype}')
+            from squirrel.library.ome_zarr import OMEZarrStore
+            oz = OMEZarrStore.create(
+                path=out_path,
+                shape=stack_shape,
+                dtype=output_dtype,
+                chunks=(max(1, min(int(batch_size / 4), 128)), 256, 256),
+                downsample_factors=(2, 2),
+                shards=None,
+                overwrite=False
             )
-            return
-        raise ValueError(f'Invalid output type = {out_filetype}')
+        if out_filetype == 'ome_zarr' and checkpoint is not None:
+            # Persist the manifest before any data write so a crash during
+            # the first batch can be resumed safely.
+            save_checkpoint()
+
+        def _write_batch(batch, id_offset, out_path):
+            out_filetype = get_filetype(out_path)
+            if out_filetype == 'dir':
+                from squirrel.library.io import write_tif_stack
+                write_tif_stack(batch, out_path, id_offset=id_offset, slice_name='slice_{:05d}.tif')
+                return
+            if out_filetype == 'ome_zarr':
+                oz.write(
+                    0, [id_offset, 0, 0],
+                    data=batch,
+                    update_pyramid=True,
+                    check_pyramid_alignment=True,
+                    require_empty=not resume
+                )
+                return
+            raise ValueError(f'Invalid output type = {out_filetype}')
         
-    for zidx in range(0, stack_shape[0], batch_size):
+        for zidx in pending:
+
+            if verbose:
+                print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
+            if zidx == first_z:
+                filtered_substack = first_batch
+                intermediates = first_intermediates
+            else:
+                filtered_substack, intermediates = filter_batch(
+                    stack_handle[zidx: zidx + batch_size], callback=progress_bar.update)
+                if filtered_substack.dtype != output_dtype:
+                    raise TypeError(f'Filter output dtype changed between batches: '
+                                    f'{output_dtype} -> {filtered_substack.dtype}')
+            if verbose:
+                print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
+            _write_batch(filtered_substack, zidx, out_path)
+            write_intermediates(intermediates, zidx)
+            if checkpoint is not None:
+                completed.add((zidx, min(zidx + batch_size, stack_shape[0])))
+                checkpoint['completed_batches'] = [list(item) for item in sorted(completed)]
+                save_checkpoint()
 
         if verbose:
-            print(f'Filtering batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
-        if zidx == 0:
-            filtered_substack = first_batch
-        else:
-            imf = ImageFilter(stack_handle[zidx: zidx + batch_size])
-            filtered_substack = imf.get_filtered_stack(filters, n_workers=n_workers)
-            if filtered_substack.dtype != output_dtype:
-                raise TypeError(f'Filter output dtype changed between batches: '
-                                f'{output_dtype} -> {filtered_substack.dtype}')
-        if verbose:
-            print(f'Writing filtered batch with z-indices {zidx} to {min(zidx + batch_size, stack_shape[0])} ...')
-        _write_batch(filtered_substack, zidx, out_path)
+            print('Filtering complete')
+    finally:
+        progress_bar.close()
 
 
 if __name__ == '__main__':

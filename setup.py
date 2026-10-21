@@ -41,6 +41,7 @@ setup(
             'sq-elastix-apply_multi_step_stack_alignment = squirrel.elastix_registration:apply_multi_step_stack_alignment',
             'sq-elastix-get_elastix_transforms_substack = squirrel.elastix_registration:get_elastix_transforms_substack',
             'sq-hydra-get_acquisition_transforms = squirrel.hydra:get_acquisition_transforms',
+            'sq-hydra-extract_tif_metadata = squirrel.hydra:extract_tif_metadata',
             'sq-image-filter_2d_workflow = squirrel.image_operations:filter_2d',
             'sq-linalg-dot_product_on_affines = squirrel.linear_algebra:dot_product_on_affines',
             'sq-linalg-scale_sequential_affines = squirrel.linear_algebra:scale_sequential_affines',
@@ -83,7 +84,9 @@ setup(
         'numpy>=1.25,<2.3',
         'h5py',
         'tifffile',
+        'PyYAML',
         'scipy',
-        'scikit-image'
+        'scikit-image',
+        'tqdm'
     ]
 )

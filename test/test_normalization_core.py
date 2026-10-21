@@ -33,6 +33,25 @@ class TestNormalizationCore(unittest.TestCase):
         result = normalize_image(image, ignore_zeros=True, keep_zeros=True, output_dtype='uint8')
         np.testing.assert_array_equal(result, [[0, 0, 28, 255]])
 
+    def test_normalization_integer_masks(self):
+        print('Testing normalization: integer masks select nonzero pixels')
+        image = np.array([[0, 10, 20, 100]], dtype=np.uint16)
+        expected_limits = (10., 20.)
+        for dtype, foreground in [('uint8', 1), ('uint8', 255), ('int16', -1)]:
+            with self.subTest(dtype=dtype, foreground=foreground):
+                mask = np.array([[0, foreground, foreground, 0]], dtype=dtype)
+                self.assertEqual(get_normalization_limits(image, mask=mask), expected_limits)
+                result = normalize_image(image, mask=mask, output_dtype='uint8')
+                np.testing.assert_array_equal(result, [[0, 0, 255, 255]])
+
+    def test_normalization_invalid_masks(self):
+        print('Testing normalization: invalid mask shape and dtype')
+        image = np.array([[0, 10, 20]], dtype=np.uint8)
+        with self.assertRaisesRegex(ValueError, 'mask must match image shape'):
+            get_normalization_limits(image, mask=np.ones(3, dtype=np.uint8))
+        with self.assertRaisesRegex(TypeError, 'mask must be boolean or integer'):
+            get_normalization_limits(image, mask=np.ones(image.shape, dtype=np.float32))
+
     def test_normalize_image_degenerate(self):
         print('Testing normalize_image: constant and empty images')
         for image in (np.zeros((3, 3)), np.ones((3, 3))):

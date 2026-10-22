@@ -612,6 +612,8 @@ def filter_2d():
                         help='Will process and write data in batches (more memory efficient); default=None')
     parser.add_argument('--n_workers', type=int, default=1,
                         help='The number of cores to use for processing')
+    parser.add_argument('--backend', choices=('serial', 'threading', 'multiprocessing'),
+                        default='threading', help='Slice execution backend (default: threading)')
     parser.add_argument('--resume', action='store_true',
                         help='Resume an interrupted TIFF-directory batch filtering run')
     parser.add_argument('--save_intermediates', action='store_true',
@@ -628,6 +630,7 @@ def filter_2d():
     filters_file = args.filters_file
     batch_size = args.batch_size
     n_workers = args.n_workers
+    backend = args.backend
     resume = args.resume
     save_intermediates = args.save_intermediates
     verbose = args.verbose
@@ -649,6 +652,7 @@ def filter_2d():
         filters=filters,
         batch_size=batch_size,
         n_workers=n_workers,
+        backend=backend,
         verbose=verbose,
         save_intermediates=save_intermediates,
         resume=resume

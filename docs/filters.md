@@ -263,11 +263,12 @@ filter_stack_workflow(
     out_path='filtered_stack',
     filters=[['median', {'radius': 2}]],
     n_workers=4,
+    backend='multiprocessing',
     batch_size=16,
 )
 ```
 
-The stack workflow also accepts `key`, `pattern`, `out_key`, and `verbose`. `batch_size=None` processes the entire stack; batched output requires a directory or OME-Zarr destination. The workflow uses the default threading backend internally; to select multiprocessing explicitly, call `ImageFilter.get_filtered_stack` directly.
+The stack workflow also accepts `key`, `pattern`, `out_key`, and `verbose`. `batch_size=None` processes the entire stack; batched output requires a directory or OME-Zarr destination. Select `backend="threading"` (default), `backend="multiprocessing"`, or `backend="serial"` (requires `n_workers=1`). The CLI exposes `--backend` and `--n_workers`; for example, `sq-stack-filter_2d_workflow input output --backend multiprocessing --n_workers 4 -f '["same", {}]'`. Parallel execution is across slices, not individual filters. With one worker execution is serial regardless of backend. Multiprocessing incurs process and data-transfer overhead, so benchmark on representative stacks.
 
 ## Errors and practical guidance
 

@@ -149,11 +149,11 @@ def register_with_elastix_workflow(
             verbose=verbose
         )
 
-        transform.to_file(out_filepath)
+        transform.write(out_filepath)
 
     else:
         from squirrel.library.affine_matrices import AffineMatrix
-        transform = AffineMatrix(filepath=out_filepath)
+        transform = AffineMatrix.read(out_filepath)
 
     if out_img_filepath:
         from squirrel.library.elastix import apply_transforms_on_image
@@ -325,7 +325,7 @@ def slice_wise_stack_to_stack_alignment_workflow(
         verbose=verbose
     )
 
-    result_transforms.to_file(out_basename + '.json')
+    result_transforms.write(out_basename + '.json')
     write_h5_container(out_filepath, np.array(result_volume), key='data', append=False)
 
 
@@ -526,7 +526,7 @@ def elastix_stack_alignment_workflow(
 
     if transform == 'translation' and max_offset_distance is not None:
         # Limit the search space for the translation
-        transforms.large_offsets_to_zero(max_offset_distance)
+        transforms = transforms.replace_large_translations(max_offset_distance)
 
     if z_step > 1:
         transforms.set_metadata('z_step', z_step)
@@ -661,8 +661,8 @@ def stack_alignment_validation_workflow(
             if verbose:
                 print(f'roi = {roi}')
             roi_data = stack[roi]
-            transforms = AffineStack(is_sequenced=False, pivot=[0., 0.])
-            transforms.append(AffineMatrix(parameters=[1., 0., 0., 0., 1., 0.]))
+            transforms = AffineStack(sequenced=False)
+            transforms.append(AffineMatrix.identity(ndim=2))
             errors = [[0, 0, 0, 0]]
 
             for idx in range(len(roi_data) - 1):
@@ -711,10 +711,10 @@ def stack_alignment_validation_workflow(
                     print(f'peak_value = {peak_value}')
                     print(f'sharpness = {sharpness}')
 
-                    result_matrix = -AffineMatrix(parameters=[1, 0, float(shift[0]), 0, 1, float(shift[1])])
+                    result_matrix = AffineMatrix.from_translation([float(shift[0]), float(shift[1])]).inverse()
 
                 elif method == 'sift':
-                    result_matrix = AffineMatrix(parameters=register_with_sift(
+                    result_matrix = AffineMatrix(register_with_sift(
                         z_slice_fixed, z_slice_moving  # , transform='translation'
                     ).flatten())
 
@@ -730,7 +730,7 @@ def stack_alignment_validation_workflow(
                     psr = mi
                     peak_value = idx
                     sharpness = 0
-                    result_matrix = -AffineMatrix(parameters=[1, 0, float(shift[0]), 0, 1, float(shift[1])])
+                    result_matrix = AffineMatrix.from_translation([float(shift[0]), float(shift[1])]).inverse()
 
                 if verbose:
                     print(f'result_matix = {result_matrix}')
@@ -740,7 +740,7 @@ def stack_alignment_validation_workflow(
                     print(f'len(transforms) = {len(transforms)}')
 
             if subtract_average:
-                transforms = transforms * -transforms.get_median_smoothed_stack(8)
+                transforms = transforms @ transforms.smooth_median(8).inverse()
 
             result_volume = apply_stack_alignment(
                 roi_data,
@@ -753,16 +753,16 @@ def stack_alignment_validation_workflow(
                 f.create_dataset('data', data=result_volume, compression='gzip')
             with File(input_filepath.format(roi_idx), mode='w') as f:
                 f.create_dataset('data', data=roi_data, compression='gzip')
-            transforms.to_file(this_transforms_fp)
+            transforms.write(this_transforms_fp)
             with open(this_errors_fp, 'w') as f:
                 json.dump(errors, f, indent=2)
 
         else:
-            transforms = AffineStack(filepath=this_transforms_fp)
+            transforms = AffineStack.read(this_transforms_fp)
             with open(this_errors_fp, 'r') as f:
                 errors = json.load(f)
 
-        translations = (np.array(transforms.get_translations()) * resolution_yx).astype(float)
+        translations = (np.array([matrix.translation for matrix in transforms]) * resolution_yx).astype(float)
         abs_shifts = np.sqrt(translations[:, 0] ** 2 + translations[:, 1] ** 2).astype(float)
         ax_shifts.plot(
             abs_shifts,
@@ -966,7 +966,7 @@ def get_elastix_transforms_substack_workflow(
         from squirrel.library.elastix import ElastixStack
         stack = ElastixStack(dirpath=transform_stack)
         substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
-        substack.to_file(out_dirpath)
+        substack.write(out_dirpath)
         return
 
     raise RuntimeError('The output already exists, choose a different output path or delete the existing one.')

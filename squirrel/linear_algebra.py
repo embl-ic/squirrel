@@ -331,12 +331,12 @@ def apply_z_step():
     verbose = args.verbose
 
     from squirrel.library.affine_matrices import AffineStack
-    stack = AffineStack(filepath=transform_filepath)
-    assert stack.exists_meta('z_step')
-    if not stack.is_sequenced:
-        stack = stack.get_sequenced_stack()
+    stack = AffineStack.read(transform_filepath)
+    assert stack.has_metadata('z_step')
+    if not stack.sequenced:
+        stack = stack.to_sequenced()
     stack = stack.apply_z_step()
-    stack.to_file(out_filepath)
+    stack.write(out_filepath)
 
 
 def append_affine_stack():
@@ -364,11 +364,11 @@ def append_affine_stack():
 
     from squirrel.library.affine_matrices import AffineStack
 
-    stack1 = AffineStack(filepath=transform_filepaths[0])
-    stack2 = AffineStack(filepath=transform_filepaths[1])
+    stack1 = AffineStack.read(transform_filepaths[0])
+    stack2 = AffineStack.read(transform_filepaths[1])
 
-    stack1.append(stack2)
-    stack1.to_file(out_filepath)
+    stack1.extend(stack2)
+    stack1.write(out_filepath)
 
 
 if __name__ == '__main__':

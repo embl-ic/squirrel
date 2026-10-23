@@ -990,7 +990,7 @@ def slice_wise_stack_to_stack_alignment(
                 verbose=verbose
             )
             if transform not in ['bspline', 'BSplineTransform']:
-                result_matrix.shift_pivot_to_origin()
+                result_matrix = result_matrix.shifted_pivot_to_origin()
 
             if result_image is not None:
                 result_stack.append(result_image)
@@ -1063,7 +1063,7 @@ def slice_wise_stack_to_stack_alignment(
                 os.remove(result_filepath)
         else:
             for result_matrix, result_image in results:
-                result_matrix.shift_pivot_to_origin()
+                result_matrix = result_matrix.shifted_pivot_to_origin()
                 if result_image is not None:
                     result_stack.append(result_image)
                 result_transforms.append(result_matrix)

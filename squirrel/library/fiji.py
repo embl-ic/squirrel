@@ -10,7 +10,7 @@ def sift_log_line_to_affine(line, pivot):
 
     from squirrel.library.affine_matrices import AffineMatrix
     # The fiji matrix has inverted x and y axes
-    m = -AffineMatrix([matrix[4], matrix[3], matrix[5], matrix[1], matrix[0], matrix[2]], pivot=pivot)
+    m = AffineMatrix([matrix[4], matrix[3], matrix[5], matrix[1], matrix[0], matrix[2]], pivot=pivot).inverse()
     # m.set_translation([-matrix[5], -matrix[2]])
     return m
 
@@ -24,7 +24,7 @@ def sift_log_to_affine_stack(
 
     pivot = [0., 0.] if pivot is None else pivot
 
-    transforms = AffineStack(pivot=pivot, is_sequenced=False)
+    transforms = AffineStack(sequenced=False)
     for line in log_lines:
         if line.startswith('Transformation Matrix:'):
             transforms.append(sift_log_line_to_affine(line, pivot))

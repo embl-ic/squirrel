@@ -261,7 +261,7 @@ def get_affine_transform(image_entry, px_size, image_shape=None, add_sem_shift=T
 
     print(math.cos(math.radians(pos.get("AT", 0.0))))
 
-    return AffineMatrix(parameters=R)
+    return AffineMatrix(R)
 
 
 def get_image_filepath(image_entry, xml_path=None):

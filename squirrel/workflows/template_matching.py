@@ -66,7 +66,7 @@ def template_matching_stack_alignment_workflow(
         from tifffile import imwrite
         imwrite(template_filepath, template)
 
-    transforms = AffineStack(is_sequenced=True, pivot=[0., 0.])
+    transforms = AffineStack(sequenced=True)
     bounds = []
 
     z_range = norm_z_range(z_range, stack_size[0])
@@ -100,5 +100,5 @@ def template_matching_stack_alignment_workflow(
                 if determine_bounds:
                     bounds.append(this_bounds)
 
-    transforms.set_meta('bounds', np.array(bounds))
-    transforms.to_file(out_filepath)
+    transforms.set_metadata('bounds', np.array(bounds))
+    transforms.write(out_filepath)

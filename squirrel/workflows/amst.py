@@ -244,7 +244,7 @@ def amst_workflow(
     # with File('/media/julian/Data/projects/hennies/amst_devel/amst_stack_elastic_ref.h5', mode='w') as f:
     #     f.create_dataset('data', data=np.clip(np.array(result_stack), 0, 255).astype('uint8'), compression='gzip')
 
-    result_transforms.to_file(out_filepath)
+    result_transforms.write(out_filepath)
 
 
 if __name__ == '__main__':

@@ -82,7 +82,7 @@ def apply_transforms_on_image(
         txif.LogToConsoleOn()
     for transform in transforms[::-1]:
         if type(transform) == AffineMatrix:
-            transform = transform.to_elastix_affine(shape=image.shape, return_parameter_map=True)
+            transform = transform.to_elastix(shape=image.shape, as_parameter_map=True)
         txif.AddTransformParameterMap(transform)
     txif.SetMovingImage(sitk.GetImageFromArray(image))
     txif.Execute()
@@ -293,7 +293,7 @@ def initialize_offsets_with_xcorr(
     offsets_unbinned = np.array(offsets) * binning
 
     from squirrel.library.affine_matrices import AffineMatrix
-    return AffineMatrix(translation=-offsets_unbinned)
+    return AffineMatrix.from_translation(-offsets_unbinned)
 
 
 def initialize_offsets(
@@ -441,7 +441,7 @@ def initialize_offsets(
 
     for idx, offset in enumerate(offsets):
 
-        this_offset = AffineMatrix(translation=offset)
+        this_offset = AffineMatrix.from_translation(offset)
         this_moving_img = apply_transforms_on_image(moving_img, [this_offset])
         this_moving_mask = apply_transforms_on_image(moving_mask, [this_offset]).astype('uint8')
         this_mask = this_moving_mask * fixed_mask
@@ -470,7 +470,7 @@ def initialize_offsets(
             if debug_dir is not None:
                 best_registered_img = registered_img.copy()
             best_offset = offset
-            best_transform_params = this_offset * AffineMatrix(elastix_parameters=this_transform_params)
+            best_transform_params = this_offset @ AffineMatrix.from_elastix(this_transform_params)
 
         result_matrix[tuple(((offset - min_offsets) / spacing).astype(int))] = mi_fixed_vs_registered
         if mi_fixed_vs_registered < mi_thresh:
@@ -491,14 +491,14 @@ def initialize_offsets(
         raise RuntimeError('Initialization failed!')
 
     best_offset_unbinned = np.array(best_offset) * binning
-    best_transform_params_unbinned = best_transform_params.get_scaled(binning)
+    best_transform_params_unbinned = best_transform_params.scaled_for_image_resize(binning)
 
     if verbose:
         print(f'best_score = {best_score}')
         print(f'best_offset = {best_offset}')
         print(f'best_offset_unbinned = {best_offset_unbinned}')
-        print(f'best_transform_params = {best_transform_params.get_matrix()}')
-        print(f'best_transform_params_unbinned = {best_transform_params_unbinned.get_matrix()}')
+        print(f'best_transform_params = {best_transform_params.as_array()}')
+        print(f'best_transform_params_unbinned = {best_transform_params_unbinned.as_array()}')
 
     if debug_dir is not None:
         if not os.path.exists(debug_dir):
@@ -522,7 +522,7 @@ def initialize_offsets(
             plt.savefig(os.path.join(debug_dir, 'mi_score_matrix.png'))
         plt.close()
 
-    print(f'Found initial offset: {best_transform_params_unbinned.get_translation()} -- MI score: {best_score}')
+    print(f'Found initial offset: {best_transform_params_unbinned.translation} -- MI score: {best_score}')
 
     return best_transform_params_unbinned
 
@@ -916,7 +916,7 @@ def register_with_elastix(
         result_matrix = _finalize_result_transform_parameters(elastix_transform_param_map, bounds_offset)
 
         if result_to_disk:
-            result_matrix.to_file(result_to_disk)
+            result_matrix.write(result_to_disk)
             return result_to_disk
         return result_matrix, result_image
 
@@ -954,7 +954,7 @@ def slice_wise_stack_to_stack_alignment(
 
     if transform in ['translation', 'affine']:
         from squirrel.library.affine_matrices import AffineStack
-        result_transforms = AffineStack(sequenced=True, pivot=[0., 0.])
+        result_transforms = AffineStack(sequenced=True)
     elif transform in ['bspline', 'BSplineTransform']:
         result_transforms = ElastixStack()
     else:
@@ -1478,7 +1478,7 @@ def search_best_registration(fixed, moving):
         params_to_origin=True,
         gaussian_sigma=1.0
     )
-    shift_elx0 = -shift_matrix.get_translation() * 8
+    shift_elx0 = -shift_matrix.translation * 8
     # Run elastix (bin4)
     shift_matrix, _ = register_with_elastix(
         average_bin_image(fixed, 4),
@@ -1490,7 +1490,7 @@ def search_best_registration(fixed, moving):
         params_to_origin=True,
         gaussian_sigma=1.0
     )
-    shift_elx1 = -shift_matrix.get_translation() * 4
+    shift_elx1 = -shift_matrix.translation * 4
     shift_matrix, _ = register_with_elastix(
         average_bin_image(fixed, 2),
         average_bin_image(moving, 2),
@@ -1501,7 +1501,7 @@ def search_best_registration(fixed, moving):
         params_to_origin=True,
         gaussian_sigma=1.0
     )
-    shift_elx2 = -shift_matrix.get_translation() * 2
+    shift_elx2 = -shift_matrix.translation * 2
 
     shifts = [
         [0., 0.],
@@ -1553,7 +1553,7 @@ def search_best_registration(fixed, moving):
         parameter_map=pmap,
         verbose=False
     )
-    final_shift = shifts[idx] - shift_matrix.get_translation()
+    final_shift = shifts[idx] - shift_matrix.translation
 
     final_error = 1 - normalized_cross_correlation(fixedg, movingg, final_shift)
     final_mi = compute_mattes_mi(fixedg, ndi_shift(movingg, shift=final_shift))

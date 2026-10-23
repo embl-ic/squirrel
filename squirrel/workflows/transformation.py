@@ -698,33 +698,7 @@ def add_translational_drift_workflow(
 
     transforms.write(out_filepath)
 
-    # from ..library.elastix import save_transforms
-    # from ..library.transformation import load_transform_matrices, save_transformation_matrices
-    # transforms, sequenced = load_transform_matrices(transform_filepath, validate=True, ndim=2)
-    # transforms = np.array(transforms)
-    #
-    # if sequenced is not None:
-    #     is_serialized = sequenced
-    #
-    # if is_serialized:
-    #     drift = [np.array(drift) * x for x in range(len(transforms))]
-    # else:
-    #     drift = [drift] * len(transforms)
-    #
-    # for idx, transform in enumerate(transforms):
-    #     transforms[idx][:2, 2] += drift[idx]
-    #
-    # # Prepare for saving
-    # transforms = [
-    #     save_transforms(x, None, param_order='M', save_order='C', ndim=2)[:6].tolist()
-    #     for x in transforms
-    # ]
-    #
-    # save_transformation_matrices(out_filepath, transforms, sequenced=sequenced)
-    #
-    # # import json
-    # # with open(out_filepath, mode='w') as f:
-    # #     json.dump(transforms, f, indent=2)
+
 
 
 def modify_step_in_sequence_workflow(transform_filepath, out_filepath, idx, affine, replace=False, return_result=False, verbose=False):
@@ -854,15 +828,5 @@ def get_affine_transforms_substack_workflow(transform_filepath, out_filepath, z_
 
 
 if __name__ == '__main__':
-
-    # from squirrel.library.affine_matrices import AffineStack, AffineMatrix
-    #
-    # affines = AffineStack(stack = [[1, 0, 0, 0, 1, 0], [1, 0, 0, 0, 1, 0], [1, 0, 0, 0, 1, 0]], is_sequenced=True)
-    #
-    # print(affines['C', :])
-    #
-    # modified_affines = modify_step_in_sequence_workflow(affines, None, 1, [1, 0, 10, 0, 1, 5], return_result=True)
-    #
-    # print(modified_affines['C', :])
 
     create_affine_sequence_workflow('test.json', 10, None, False)

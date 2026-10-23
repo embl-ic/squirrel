@@ -735,35 +735,38 @@ def modify_step_in_sequence_workflow(transform_filepath, out_filepath, idx, affi
         print(f'affine = {affine}')
         print(f'replace = {replace}')
 
-    # from ..library.linalg import modify_step_in_sequence
-    # from ..library.transformation import load_transform_matrices, save_transformation_matrices
-    # from ..library.elastix import save_transforms
-    #
-    # transforms, sequenced = load_transform_matrices(transform_filepath, validate=True, ndim=2)
-    # transforms = modify_step_in_sequence(transforms, idx, affine, replace=replace)
-    # save_transformation_matrices(
-    #     out_filepath,
-    #     save_transforms(transforms, None, param_order='M', save_order='C', ndim=2),
-    #     sequenced=sequenced
-    # )
+    from squirrel.library.affine_matrices import AffineMatrix, AffineStack
 
-    from squirrel.library.affine_matrices import AffineStack, AffineMatrix
-    if not isinstance(transform_filepath, AffineStack):
-        transforms = AffineStack(filepath=transform_filepath)
+    if isinstance(transform_filepath, AffineStack):
+        transforms = transform_filepath.copy()
     else:
-        transforms = transform_filepath
+        transforms = AffineStack.read(transform_filepath)
+
+    if not 0 <= idx < len(transforms):
+        raise IndexError(f'Transform index {idx} is out of range.')
+    if replace and transforms.sequenced:
+        raise ValueError('Replacing a step requires a relative affine stack.')
+
+    modification = AffineMatrix(affine, pivot=transforms.pivot)
+    matrices = [matrix.copy() for matrix in transforms]
+
     if replace:
-        assert not transforms.is_sequenced
-        transforms[idx] = AffineMatrix(parameters=affine)
-    if transforms.is_sequenced:
-        for tidx, transform in enumerate(transforms[idx:]):
-            transforms[idx + tidx] = transform * AffineMatrix(parameters=affine)
+        matrices[idx] = modification
+    elif transforms.sequenced:
+        for tidx in range(idx, len(matrices)):
+            matrices[tidx] = matrices[tidx] @ modification
     else:
-        transforms[idx] = transforms[idx] * AffineMatrix(parameters=affine)
+        matrices[idx] = matrices[idx] @ modification
+
+    result = AffineStack(
+        matrices=matrices,
+        sequenced=transforms.sequenced,
+        metadata=transforms.metadata,
+    )
 
     if return_result:
-        return transforms
-    transforms.to_file(out_filepath)
+        return result
+    result.write(out_filepath)
 
 
 def create_affine_sequence_workflow(

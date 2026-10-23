@@ -290,3 +290,63 @@ class TestApplyAffineTransform(unittest.TestCase):
             result.shape,
             (5, 4),
         )
+
+
+class TestAffineWorkflowCompatibility(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_sequence_and_crop_preserve_metadata(self):
+        print('Testing affine workflow sequencing and cropping')
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import (
+            sequence_affine_stack_workflow,
+            crop_transform_sequence_workflow,
+        )
+
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.json'
+            sequenced = Path(folder) / 'sequenced.json'
+            cropped = Path(folder) / 'cropped.json'
+            stack = AffineStack.from_array(
+                [[1, 0, 1, 0, 1, 0]] * 4,
+                sequenced=False,
+                metadata={'stack_shape': [4, 20, 30]},
+            )
+            stack.write(source)
+            sequence_affine_stack_workflow(source, sequenced)
+            result = AffineStack.read(sequenced)
+            self.assertTrue(result.sequenced)
+            np.testing.assert_allclose([m.translation[0] for m in result], [1, 2, 3, 4])
+
+            crop_transform_sequence_workflow(sequenced, cropped, [1, 3])
+            result = AffineStack.read(cropped)
+            self.assertEqual(len(result), 2)
+            self.assertTrue(result.sequenced)
+            self.assertEqual(result.get_metadata('stack_shape'), [2, 20, 30])
+            np.testing.assert_allclose([m.translation[0] for m in result], [2, 3])
+
+    def test_drift_and_smoothing(self):
+        print('Testing affine workflow drift and smoothing')
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import (
+            add_translational_drift_workflow,
+            smooth_affine_sequence_workflow,
+        )
+
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.json'
+            drifted = Path(folder) / 'drifted.json'
+            smoothed = Path(folder) / 'smoothed.json'
+            stack = AffineStack.from_array([[1, 0, 0, 0, 1, 0]] * 3, sequenced=True)
+            stack.write(source)
+            add_translational_drift_workflow(source, drifted, [2, 3])
+            result = AffineStack.read(drifted)
+            np.testing.assert_allclose([m.translation for m in result], [[0, 0], [2, 3], [4, 6]])
+            smooth_affine_sequence_workflow(drifted, smoothed, sigma=0)
+            np.testing.assert_allclose(AffineStack.read(smoothed).as_array(), result.as_array())

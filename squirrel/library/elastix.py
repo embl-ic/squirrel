@@ -1255,7 +1255,7 @@ class ElastixStack:
 
     def __getitem__(self, item):
         if isinstance(item, slice):
-            return self.get_substack(item)
+            return ElastixStack(transforms=self._transforms[item])
         return self._transforms[item]
 
     def __len__(self):
@@ -1305,10 +1305,6 @@ class ElastixStack:
     def __repr__(self):
         return f'ElastixStack(n_transforms={len(self)})'
 
-    def get_substack(self, sl: slice):
-        if not isinstance(sl, slice):
-            raise TypeError('selection must be a slice.')
-        return ElastixStack(transforms=self._transforms[sl])
 
 
 def load_transform_stack_from_multiple_files(paths, sequence_stack=False):

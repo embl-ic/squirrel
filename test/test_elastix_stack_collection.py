@@ -36,6 +36,17 @@ class TestElastixStackCollection(unittest.TestCase):
         self.assertIsInstance(stack[:1], ElastixStack)
         self.assertEqual(len(stack[:1]), 1)
 
+    def test_slice_is_independent(self):
+        print('Testing ElastixStack: slicing copies parameter maps')
+        from squirrel.library.elastix import ElastixStack
+
+        stack = ElastixStack(transforms=[self.make_map(1), self.make_map(2)])
+        sliced = stack[:1]
+        sliced[0]['TransformParameters'] = ['99']
+
+        self.assertEqual(stack[0]['TransformParameters'], ['1'])
+        self.assertEqual(len(sliced), 1)
+
     def test_copy_and_independent_iteration(self):
         print('Testing ElastixStack: copy isolation and nested iteration')
         from squirrel.library.elastix import ElastixStack

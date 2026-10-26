@@ -965,7 +965,7 @@ def get_elastix_transforms_substack_workflow(
     if not os.path.exists(out_dirpath):
         from squirrel.library.elastix import ElastixStack
         stack = ElastixStack.read(transform_stack)
-        substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
+        substack = stack[z_range[0]:z_range[1]]
         substack.write(out_dirpath)
         return
 

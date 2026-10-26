@@ -805,7 +805,7 @@ def crop_transform_sequence_workflow(transform_filepath, out_filepath, z_range, 
 
     from squirrel.library.affine_matrices import AffineStack
     stack = AffineStack.read(transform_filepath)
-    out_stack = stack.get_substack(slice(z_range[0], z_range[1]))
+    out_stack = stack[z_range[0]:z_range[1]]
 
     out_stack.write(out_filepath)
 
@@ -822,7 +822,7 @@ def get_affine_transforms_substack_workflow(transform_filepath, out_filepath, z_
     stack = AffineStack.read(transform_filepath)
 
     import numpy as np
-    substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
+    substack = stack[z_range[0]:z_range[1]]
 
     substack.write(out_filepath)
 

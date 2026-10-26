@@ -24,16 +24,18 @@ class BlenderRenderer(Renderer):
         samples=128,
         world_scale=1e-3,
         view_transform="Standard",
-        look="None",
-        exposure=1.5,
-        gamma=0.8,
-        light_placement="top-right",
-        light_angle=35.0,
-        light_power=300.0,
+        look="Medium High Contrast",
+        exposure=0,
+        gamma=1,
+        light_angle=20,
+        light_orientation_angle=45,
+        light_power=800.0,
         light_temperature=None,
-        world_strength=0.5,
-        em_slice_emission_strength=0.05,
-        upright_scene=False,
+        light_size=None,
+        world_strength=0.8,
+        em_slice_emission_strength=0,
+        surface_preset="default",
+        upright_scene=True,
     ):
         self.blender_executable = blender_executable
         self.template = template
@@ -46,23 +48,29 @@ class BlenderRenderer(Renderer):
         self.exposure = exposure
         self.gamma = gamma
 
-        valid_placements = {
-            "top-left", "top", "top-right",
-            "left", "center", "right",
-            "bottom-left", "bottom", "bottom-right",
-        }
-        if light_placement not in valid_placements:
-            raise ValueError(
-                f"Invalid light_placement: {light_placement}. "
-                f"Expected one of {sorted(valid_placements)}."
-            )
         if not 0 <= light_angle < 90:
             raise ValueError("light_angle must be in the range [0, 90).")
 
-        self.light_placement = light_placement
         self.light_angle = float(light_angle)
+        self.light_orientation_angle = float(light_orientation_angle) % 360.0
         self.light_power = float(light_power)
         self.light_temperature = light_temperature
+        self.light_size = None if light_size is None else float(light_size)
+        if self.light_size is not None and self.light_size <= 0:
+            raise ValueError("light_size must be positive or None.")
+
+        valid_surface_presets = {
+            "default", "matte", "plastic", "metallic", "glass", "subsurface",
+            "ceramic", "frosted_glass", "wax", "iridescent",
+            "holographic", "neon", "gemstone", "soap_bubble", "alien", "velvet",
+        }
+        if surface_preset not in valid_surface_presets:
+            raise ValueError(
+                f"Invalid surface_preset: {surface_preset}. "
+                f"Expected one of {sorted(valid_surface_presets)}."
+            )
+        self.surface_preset = surface_preset
+
         self.world_strength = float(world_strength)
         self.em_slice_emission_strength = float(em_slice_emission_strength)
         self.upright_scene = bool(upright_scene)
@@ -410,10 +418,12 @@ class BlenderRenderer(Renderer):
                 "gamma": self.gamma,
                 "world_strength": self.world_strength,
                 "em_slice_emission_strength": self.em_slice_emission_strength,
-                "light_placement": self.light_placement,
                 "light_angle": self.light_angle,
+                "light_orientation_angle": self.light_orientation_angle,
                 "light_power": self.light_power,
                 "light_temperature": self.light_temperature,
+                "light_size": self.light_size,
+                "surface_preset": self.surface_preset,
                 "upright_scene": self.upright_scene,
                 "output_size": list(self.output_size),
                 "samples": self.samples,
@@ -500,16 +510,95 @@ def make_material(name, color):
         1.0,
     )
 
-    bsdf.inputs["Roughness"].default_value = 0.7
-
+    # Start from a non-emissive material. Individual presets may override it.
     bsdf.inputs["Emission Color"].default_value = (
         color_linear[0],
         color_linear[1],
         color_linear[2],
         1.0,
     )
-
     bsdf.inputs["Emission Strength"].default_value = 0.0
+
+    surface_preset = data["render_settings"].get("surface_preset", "default")
+    if surface_preset == "default":
+        bsdf.inputs["Roughness"].default_value = 0.7
+    elif surface_preset == "matte":
+        bsdf.inputs["Roughness"].default_value = 1.0
+    elif surface_preset == "plastic":
+        bsdf.inputs["Roughness"].default_value = 0.3
+        bsdf.inputs["IOR"].default_value = 1.45
+    elif surface_preset == "metallic":
+        bsdf.inputs["Metallic"].default_value = 1.0
+        bsdf.inputs["Roughness"].default_value = 0.25
+    elif surface_preset == "glass":
+        bsdf.inputs["Roughness"].default_value = 0.1
+        bsdf.inputs["IOR"].default_value = 1.45
+        bsdf.inputs["Transmission Weight"].default_value = 1.0
+    elif surface_preset == "subsurface":
+        bsdf.inputs["Roughness"].default_value = 0.45
+        bsdf.inputs["Subsurface Weight"].default_value = 0.2
+        bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.5, 0.25)
+    elif surface_preset == "ceramic":
+        bsdf.inputs["Roughness"].default_value = 0.18
+        bsdf.inputs["IOR"].default_value = 1.5
+        bsdf.inputs["Coat Weight"].default_value = 0.35
+        bsdf.inputs["Coat Roughness"].default_value = 0.08
+    elif surface_preset == "frosted_glass":
+        bsdf.inputs["Roughness"].default_value = 0.38
+        bsdf.inputs["IOR"].default_value = 1.45
+        bsdf.inputs["Transmission Weight"].default_value = 1.0
+    elif surface_preset == "wax":
+        bsdf.inputs["Roughness"].default_value = 0.6
+        bsdf.inputs["IOR"].default_value = 1.45
+        bsdf.inputs["Subsurface Weight"].default_value = 0.55
+        bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.45, 0.2)
+    elif surface_preset == "iridescent":
+        bsdf.inputs["Roughness"].default_value = 0.25
+        bsdf.inputs["Metallic"].default_value = 0.0
+        bsdf.inputs["Coat Weight"].default_value = 0.4
+        bsdf.inputs["Coat Roughness"].default_value = 0.15
+        bsdf.inputs["Thin Film IOR"].default_value = 1.3
+        bsdf.inputs["Thin Film Thickness"].default_value = 500.0
+    elif surface_preset == "holographic":
+        bsdf.inputs["Roughness"].default_value = 0.08
+        bsdf.inputs["Metallic"].default_value = 0.35
+        bsdf.inputs["Coat Weight"].default_value = 0.75
+        bsdf.inputs["Coat Roughness"].default_value = 0.04
+        bsdf.inputs["Thin Film IOR"].default_value = 1.45
+        bsdf.inputs["Thin Film Thickness"].default_value = 750.0
+    elif surface_preset == "neon":
+        bsdf.inputs["Roughness"].default_value = 0.3
+        bsdf.inputs["Emission Strength"].default_value = 4.0
+    elif surface_preset == "gemstone":
+        bsdf.inputs["Roughness"].default_value = 0.06
+        bsdf.inputs["IOR"].default_value = 1.77
+        bsdf.inputs["Transmission Weight"].default_value = 0.85
+        bsdf.inputs["Coat Weight"].default_value = 0.2
+        bsdf.inputs["Coat Roughness"].default_value = 0.03
+    elif surface_preset == "soap_bubble":
+        bsdf.inputs["Roughness"].default_value = 0.03
+        bsdf.inputs["IOR"].default_value = 1.33
+        bsdf.inputs["Transmission Weight"].default_value = 0.95
+        bsdf.inputs["Coat Weight"].default_value = 0.25
+        bsdf.inputs["Coat Roughness"].default_value = 0.02
+        bsdf.inputs["Thin Film IOR"].default_value = 1.33
+        bsdf.inputs["Thin Film Thickness"].default_value = 350.0
+    elif surface_preset == "alien":
+        bsdf.inputs["Roughness"].default_value = 0.16
+        bsdf.inputs["Metallic"].default_value = 0.12
+        bsdf.inputs["Subsurface Weight"].default_value = 0.22
+        bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.3, 0.12)
+        bsdf.inputs["Coat Weight"].default_value = 0.65
+        bsdf.inputs["Coat Roughness"].default_value = 0.08
+        bsdf.inputs["Thin Film IOR"].default_value = 1.4
+        bsdf.inputs["Thin Film Thickness"].default_value = 620.0
+        bsdf.inputs["Emission Strength"].default_value = 0.35
+    elif surface_preset == "velvet":
+        bsdf.inputs["Roughness"].default_value = 0.82
+        bsdf.inputs["Sheen Weight"].default_value = 0.8
+        bsdf.inputs["Sheen Roughness"].default_value = 0.35
+    else:
+        raise ValueError(f"Invalid surface preset: {surface_preset}")
 
     return mat
 
@@ -1049,7 +1138,8 @@ light_data = bpy.data.lights.new(
 )
 light_data.energy = settings["light_power"]
 light_data.shape = "SQUARE"
-light_data.size = 2.0 * diameter
+light_size = settings.get("light_size")
+light_data.size = 2.0 * diameter if light_size is None else light_size
 
 if settings["light_temperature"] is not None:
     light_data.use_temperature = True
@@ -1058,21 +1148,11 @@ if settings["light_temperature"] is not None:
 light = bpy.data.objects.new("Key", light_data)
 bpy.context.collection.objects.link(light)
 
-placement_vectors = {
-    "top-left": (-1, 1),
-    "top": (0, 1),
-    "top-right": (1, 1),
-    "left": (-1, 0),
-    "center": (0, 0),
-    "right": (1, 0),
-    "bottom-left": (-1, -1),
-    "bottom": (0, -1),
-    "bottom-right": (1, -1),
-}
-px, py = placement_vectors[settings["light_placement"]]
-offset = final_right * px + final_up * py
-if offset.length > 0:
-    offset.normalize()
+orientation_angle = math.radians(settings["light_orientation_angle"])
+offset = (
+    final_up * math.cos(orientation_angle)
+    + final_right * math.sin(orientation_angle)
+).normalized()
 
 angle = math.radians(settings["light_angle"])
 light_direction = (
@@ -1097,7 +1177,18 @@ scene.render.engine = "CYCLES"
 # Store the intended color-management settings in the .blend itself so the
 # interactive Blender project matches the final scripted render.
 scene.view_settings.view_transform = settings["view_transform"]
-scene.view_settings.look = settings["look"]
+
+# Blender's Look enum uses names such as "AgX - Medium High Contrast".
+# Accept the shorter renderer-facing form as well, while still allowing exact
+# Blender enum names to be supplied explicitly.
+look = settings["look"]
+look_items = {
+    item.identifier
+    for item in scene.view_settings.bl_rna.properties["look"].enum_items
+}
+if look not in look_items and f"AgX - {look}" in look_items:
+    look = f"AgX - {look}"
+scene.view_settings.look = look
 scene.view_settings.exposure = settings["exposure"]
 scene.view_settings.gamma = settings["gamma"]
 

@@ -1075,7 +1075,7 @@ if __name__ == '__main__':
         .assign_colors(
             palette='rainbow_discrete',
             mode='random',
-            hue_shift=0.08,
+            hue_shift=0,  # 0.08,
             lightness_shift=0.0,
             normal_mode='left_right',
             seed=4,
@@ -1121,25 +1121,31 @@ if __name__ == '__main__':
     scene.rotate_camera('z', 20)
     scene.rotate_camera('y', 7)
 
-    # Pyvista rendering
-    from squirrel.library.render.pyvista_renderer import PyVistaRenderer
-    renderer = PyVistaRenderer(off_screen=True, image_size=(1000, 1000), world_scale=0.001)
-    renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
+    # # Pyvista rendering
+    # from squirrel.library.render.pyvista_renderer import PyVistaRenderer
+    # renderer = PyVistaRenderer(off_screen=False, image_size=(1000, 1000), world_scale=0.001)
+    # # renderer.screenshot(scene, os.path.join(out_dir, 'scene.png'))
     # renderer.show(scene)
 
     # Blender rendering
     from squirrel.library.render.blender_renderer import BlenderRenderer
     renderer = BlenderRenderer(
-        samples=128,
         output_size=(1000, 1000),
-        world_scale=0.001,
-        light_placement="top-left",
-        light_angle=10,
-        em_slice_emission_strength=0.02,
-        light_temperature=4000,
+        samples=128,
+        # world_scale=0.001,
+        # view_transform="Standard",
+        # look="Medium High Contrast",
+        # exposure=0,
+        # gamma=1,
+        # light_angle=15,
+        # light_orientation_angle=290,
+        # light_power=800.0,
+        # light_temperature=None,
+        # light_size=5,
+        # world_strength=0.8,
+        # em_slice_emission_strength=0,
         upright_scene=True,
-        view_transform="Standard",
-        look="Medium High Contrast",
+        surface_preset="subsurface"
     )
     renderer.screenshot(scene, os.path.join(out_dir, 'scene_blender.png'))
     # renderer.write_blend(scene, os.path.join(out_dir, 'scene.blend'))

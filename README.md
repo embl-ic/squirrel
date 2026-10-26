@@ -104,3 +104,8 @@ sq-stack-tif_nearest_scaling -h
 ```
 
 The -h flag yields the help output describing functions and parameters
+
+
+## Transformation stacks
+
+See [Transformation stack APIs](docs/transformation_stacks.md) for the `AffineStack` and `ElastixStack` interfaces.

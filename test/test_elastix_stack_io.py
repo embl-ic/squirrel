@@ -47,9 +47,9 @@ class TestElastixStackIO(unittest.TestCase):
             restored.write(other_path)
             self.assertEqual(len(ElastixStack.read(other_path)), 1)
 
-    def test_read_many_and_legacy_helper(self):
-        print('Testing ElastixStack: read_many ordering and legacy helper')
-        from squirrel.library.elastix import ElastixStack, load_transform_stack_from_multiple_files
+    def test_read_many(self):
+        print('Testing ElastixStack: read_many ordering')
+        from squirrel.library.elastix import ElastixStack
 
         with tempfile.TemporaryDirectory() as root:
             paths = []
@@ -60,7 +60,6 @@ class TestElastixStackIO(unittest.TestCase):
 
             combined = ElastixStack.read_many(paths)
             self.assertEqual([t['TransformParameters'][0] for t in combined], ['0', '1'])
-            self.assertEqual(len(load_transform_stack_from_multiple_files(paths)), 2)
             self.assertEqual(len(ElastixStack.read_many([])), 0)
 
     def test_read_pattern(self):
@@ -73,3 +72,10 @@ class TestElastixStackIO(unittest.TestCase):
                     file.write(name)
             self.assertEqual(len(ElastixStack.read(root)), 1)
             self.assertEqual(len(ElastixStack.read(root, pattern='*.map')), 1)
+
+    def test_legacy_multi_file_helper_removed(self):
+        print('Testing ElastixStack: obsolete multi-file helper is removed')
+        from squirrel.library import elastix
+
+        self.assertFalse(hasattr(elastix, 'load_transform_stack_from_multiple_files'))
+        self.assertTrue(hasattr(elastix.ElastixStack, 'read_many'))

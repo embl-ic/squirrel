@@ -1316,10 +1316,6 @@ class ElastixStack:
 
 
 
-def load_transform_stack_from_multiple_files(paths, sequence_stack=False):
-
-    return ElastixStack.read_many(paths)
-
 
 class ElastixMultiStepStack:
 

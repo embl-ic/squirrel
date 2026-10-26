@@ -69,3 +69,29 @@ class TestElastixStackCollection(unittest.TestCase):
         self.assertEqual(len(stack), 2)
         with self.assertRaises(TypeError):
             ElastixStack(transforms=[object()])
+
+    def test_extend_rejects_invalid_input_without_partial_mutation(self):
+        print('Testing ElastixStack: extend validates before modifying the stack')
+        from squirrel.library.elastix import ElastixStack
+
+        stack = ElastixStack(transforms=[self.make_map(1)])
+        with self.assertRaises(TypeError):
+            stack.extend([self.make_map(2), object()])
+        self.assertEqual(len(stack), 1)
+        self.assertEqual(stack[0]['TransformParameters'], ['1'])
+
+        with self.assertRaises(TypeError):
+            stack.extend(None)
+        self.assertEqual(len(stack), 1)
+
+    def test_extend_copies_maps_and_accepts_generator(self):
+        print('Testing ElastixStack: extend copies maps from a generator')
+        from squirrel.library.elastix import ElastixStack
+
+        source = [self.make_map(1), self.make_map(2)]
+        stack = ElastixStack()
+        stack.extend(transform for transform in source)
+        source[0]['TransformParameters'][0] = '99'
+
+        self.assertEqual(len(stack), 2)
+        self.assertEqual(stack[0]['TransformParameters'], ['1'])

@@ -1264,16 +1264,25 @@ class ElastixStack:
     def __iter__(self):
         return iter(self._transforms)
 
-    def append(self, other):
+    def append(self, transform):
         from SimpleITK import ParameterMap
 
-        if not isinstance(other, ParameterMap):
+        if not isinstance(transform, ParameterMap):
             raise TypeError('append expects a SimpleITK ParameterMap; use extend for stacks.')
-        self._transforms.append(self._copy_transform(other))
+        self._transforms.append(self._copy_transform(transform))
 
-    def extend(self, other):
-        for transform in list(other):
-            self.append(transform)
+    def extend(self, transforms):
+        from SimpleITK import ParameterMap
+
+        try:
+            transforms = list(transforms)
+        except TypeError as exc:
+            raise TypeError('extend expects an iterable of SimpleITK ParameterMap objects.') from exc
+
+        if not all(isinstance(transform, ParameterMap) for transform in transforms):
+            raise TypeError('All transforms must be SimpleITK ParameterMap objects.')
+
+        self._transforms.extend(self._copy_transform(transform) for transform in transforms)
 
     def copy(self):
         return ElastixStack(transforms=self._transforms)

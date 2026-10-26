@@ -1241,7 +1241,22 @@ class ElastixStack:
             result[key] = list(transform[key])
         return result
 
-    def set_from_dir(self, dirpath, pattern):
+    @classmethod
+    def read(cls, dirpath, pattern='*.txt'):
+        """Read an Elastix transformation stack from a directory."""
+        result = cls()
+        result.set_from_dir(dirpath, pattern)
+        return result
+
+    @classmethod
+    def read_many(cls, dirpaths, pattern='*.txt'):
+        """Read and concatenate transformation stacks from directories."""
+        result = cls()
+        for dirpath in dirpaths:
+            result.extend(cls.read(dirpath, pattern=pattern))
+        return result
+
+    def set_from_dir(self, dirpath, pattern='*.txt'):
         from SimpleITK import ReadParameterFile
         import glob
         filepaths = sorted(glob.glob(os.path.join(dirpath, pattern)))
@@ -1249,13 +1264,18 @@ class ElastixStack:
         self._dirpath = dirpath
         self._pattern = pattern
 
-    def to_file(self, dirpath):
+    def write(self, dirpath):
+        """Write transformation parameter files to a directory."""
         from SimpleITK import WriteParameterFile
         if not os.path.exists(dirpath):
             os.mkdir(dirpath)
         for idx, transform in enumerate(self._stack):
             filepath = os.path.join(dirpath, 'transform_{:05d}.txt'.format(idx))
             WriteParameterFile(transform, filepath)
+
+    def to_file(self, dirpath):
+        """Compatibility alias for write()."""
+        self.write(dirpath)
 
     def __getitem__(self, item):
         if isinstance(item, slice):
@@ -1305,10 +1325,7 @@ class ElastixStack:
 
 def load_transform_stack_from_multiple_files(paths, sequence_stack=False):
 
-    stack = ElastixStack(dirpath=paths[0])
-    for path in paths[1:]:
-        stack.extend(ElastixStack(dirpath=path))
-    return stack
+    return ElastixStack.read_many(paths)
 
 
 class ElastixMultiStepStack:

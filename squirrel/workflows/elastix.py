@@ -863,7 +863,7 @@ def apply_multi_step_stack_alignment_workflow(
     stacks = []
     for transform_path in transform_paths:
         if os.path.isdir(transform_path):
-            stack = ElastixStack(dirpath=transform_path)  # , image_shape=target_image_shape))
+            stack = ElastixStack.read(transform_path)  # , image_shape=target_image_shape))
             if z_range is not None:
                 stack = ElastixStack(stack=stack[start_transform_id: start_transform_id + z_range[1] - z_range[0]])
             stacks.append(stack)
@@ -964,7 +964,7 @@ def get_elastix_transforms_substack_workflow(
 
     if not os.path.exists(out_dirpath):
         from squirrel.library.elastix import ElastixStack
-        stack = ElastixStack(dirpath=transform_stack)
+        stack = ElastixStack.read(transform_stack)
         substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
         substack.write(out_dirpath)
         return

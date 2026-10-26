@@ -1308,14 +1308,32 @@ class ElastixStack:
         result._pattern = self._pattern
         return result
 
+    @property
     def image_shape(self):
-        shapes = []
-        for transform in self:
-            shapes.append(np.array([int(float(x)) for x in transform['Size']])[::-1])
-        shapes = np.array(shapes)
-        assert np.all(shapes == shapes[0], axis=0).all(), 'Not all shapes of the transforms are equal - but they should be!'
+        """Return the common image shape in NumPy axis order, or None if empty."""
+        if not self._stack:
+            return None
 
-        return shapes[0]
+        shapes = []
+        for idx, transform in enumerate(self._stack):
+            if 'Size' not in transform:
+                raise ValueError(f'Transform {idx} is missing the Size parameter.')
+            try:
+                values = [float(value) for value in transform['Size']]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f'Transform {idx} has an invalid Size parameter.') from exc
+            if not values or any(
+                    not np.isfinite(value) or value <= 0 or not value.is_integer()
+                    for value in values):
+                raise ValueError(f'Transform {idx} has an invalid Size parameter.')
+            shapes.append(tuple(int(value) for value in values[::-1]))
+
+        if any(shape != shapes[0] for shape in shapes[1:]):
+            raise ValueError('Not all transforms have the same image shape.')
+        return np.array(shapes[0], dtype=int)
+
+    def __repr__(self):
+        return f'ElastixStack(n_transforms={len(self)})'
 
     def get_substack(self, sl: slice):
         if not isinstance(sl, slice):

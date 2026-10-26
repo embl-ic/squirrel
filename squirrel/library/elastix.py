@@ -1197,40 +1197,26 @@ def c_to_elastix(parameters):
 
 class ElastixStack:
 
-    def __init__(self, transforms=None, dirpath=None, pattern='*.txt', image_shape=None, stack=None):
-        self._dirpath = None
-        self._pattern = None
-        self._stack = []
-
-        if transforms is not None and stack is not None:
-            raise ValueError('Specify either transforms or stack, not both.')
-        if dirpath is not None and (transforms is not None or stack is not None):
-            raise ValueError('Specify either transforms or dirpath, not both.')
-
-        if transforms is None:
-            transforms = stack
-        if transforms is not None:
-            self.set_from_stack(transforms, image_shape=image_shape)
-        if dirpath is not None:
-            self.set_from_dir(dirpath, pattern)
-
-    def set_from_stack(self, stack, image_shape=None):
+    def __init__(self, transforms=None, image_shape=None):
         from SimpleITK import ParameterMap
         from squirrel.library.affine_matrices import AffineStack
 
-        if isinstance(stack, AffineStack):
-            transforms = [x.to_elastix(as_parameter_map=True, shape=image_shape) for x in stack]
-        elif isinstance(stack, ElastixStack):
-            transforms = list(stack)
+        self._transforms = []
+        if transforms is None:
+            return
+
+        if isinstance(transforms, AffineStack):
+            transforms = [matrix.to_elastix(as_parameter_map=True, shape=image_shape)
+                          for matrix in transforms]
         else:
             try:
-                transforms = list(stack)
+                transforms = list(transforms)
             except TypeError as exc:
                 raise TypeError('transforms must be a sequence of parameter maps.') from exc
 
         if not all(isinstance(transform, ParameterMap) for transform in transforms):
             raise TypeError('All transforms must be SimpleITK ParameterMap objects.')
-        self._stack = [self._copy_transform(transform) for transform in transforms]
+        self._transforms = [self._copy_transform(transform) for transform in transforms]
 
     @staticmethod
     def _copy_transform(transform):
@@ -1244,9 +1230,11 @@ class ElastixStack:
     @classmethod
     def read(cls, dirpath, pattern='*.txt'):
         """Read an Elastix transformation stack from a directory."""
-        result = cls()
-        result.set_from_dir(dirpath, pattern)
-        return result
+        from SimpleITK import ReadParameterFile
+        import glob
+
+        filepaths = sorted(glob.glob(os.path.join(dirpath, pattern)))
+        return cls(transforms=[ReadParameterFile(filepath) for filepath in filepaths])
 
     @classmethod
     def read_many(cls, dirpaths, pattern='*.txt'):
@@ -1256,66 +1244,48 @@ class ElastixStack:
             result.extend(cls.read(dirpath, pattern=pattern))
         return result
 
-    def set_from_dir(self, dirpath, pattern='*.txt'):
-        from SimpleITK import ReadParameterFile
-        import glob
-        filepaths = sorted(glob.glob(os.path.join(dirpath, pattern)))
-        self._stack = [ReadParameterFile(filepath) for filepath in filepaths]
-        self._dirpath = dirpath
-        self._pattern = pattern
-
     def write(self, dirpath):
         """Write transformation parameter files to a directory."""
         from SimpleITK import WriteParameterFile
         if not os.path.exists(dirpath):
             os.mkdir(dirpath)
-        for idx, transform in enumerate(self._stack):
+        for idx, transform in enumerate(self._transforms):
             filepath = os.path.join(dirpath, 'transform_{:05d}.txt'.format(idx))
             WriteParameterFile(transform, filepath)
-
-    def to_file(self, dirpath):
-        """Compatibility alias for write()."""
-        self.write(dirpath)
 
     def __getitem__(self, item):
         if isinstance(item, slice):
             return self.get_substack(item)
-        return self._stack[item]
-
-    def __setitem__(self, key, value):
-        self._stack[key] = value
+        return self._transforms[item]
 
     def __len__(self):
-        return len(self._stack)
+        return len(self._transforms)
 
     def __iter__(self):
-        return iter(self._stack)
+        return iter(self._transforms)
 
     def append(self, other):
         from SimpleITK import ParameterMap
 
         if not isinstance(other, ParameterMap):
             raise TypeError('append expects a SimpleITK ParameterMap; use extend for stacks.')
-        self._stack.append(self._copy_transform(other))
+        self._transforms.append(self._copy_transform(other))
 
     def extend(self, other):
         for transform in list(other):
             self.append(transform)
 
     def copy(self):
-        result = ElastixStack(transforms=self._stack)
-        result._dirpath = self._dirpath
-        result._pattern = self._pattern
-        return result
+        return ElastixStack(transforms=self._transforms)
 
     @property
     def image_shape(self):
         """Return the common image shape in NumPy axis order, or None if empty."""
-        if not self._stack:
+        if not self._transforms:
             return None
 
         shapes = []
-        for idx, transform in enumerate(self._stack):
+        for idx, transform in enumerate(self._transforms):
             if 'Size' not in transform:
                 raise ValueError(f'Transform {idx} is missing the Size parameter.')
             try:
@@ -1338,7 +1308,7 @@ class ElastixStack:
     def get_substack(self, sl: slice):
         if not isinstance(sl, slice):
             raise TypeError('selection must be a slice.')
-        return ElastixStack(transforms=self._stack[sl])
+        return ElastixStack(transforms=self._transforms[sl])
 
 
 def load_transform_stack_from_multiple_files(paths, sequence_stack=False):
@@ -1360,7 +1330,7 @@ class ElastixMultiStepStack:
             [self.add_stack(stack, image_shape=image_shape) for stack in stacks]
 
     def add_stack(self, stack, image_shape=None):
-        stack = ElastixStack(stack=stack, image_shape=image_shape)
+        stack = ElastixStack(transforms=stack, image_shape=image_shape)
         if self._stacks is not None:
             assert len(stack) == len(self), 'The length of the added stack does not match'
             self._stacks = [self[idx] + [s] for idx, s in enumerate(stack)]

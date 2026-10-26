@@ -865,7 +865,7 @@ def apply_multi_step_stack_alignment_workflow(
         if os.path.isdir(transform_path):
             stack = ElastixStack.read(transform_path)  # , image_shape=target_image_shape))
             if z_range is not None:
-                stack = ElastixStack(stack=stack[start_transform_id: start_transform_id + z_range[1] - z_range[0]])
+                stack = ElastixStack(transforms=stack[start_transform_id: start_transform_id + z_range[1] - z_range[0]])
             stacks.append(stack)
         else:
             stack = AffineStack.read(transform_path)
@@ -891,7 +891,7 @@ def apply_multi_step_stack_alignment_workflow(
 
                 stack = stack.to_sequenced()
 
-            stacks.append(ElastixStack(stack=stack, image_shape=image_shape))
+            stacks.append(ElastixStack(transforms=stack, image_shape=image_shape))
 
     if verbose:
         print(f'target_image_shape = {target_image_shape}')

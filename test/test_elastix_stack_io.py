@@ -32,7 +32,7 @@ class TestElastixStackIO(unittest.TestCase):
         self.addCleanup(self.patcher.stop)
 
     def test_read_write_roundtrip(self):
-        print('Testing ElastixStack: read/write roundtrip and compatibility aliases')
+        print('Testing ElastixStack: read/write roundtrip')
         from squirrel.library.elastix import ElastixStack
 
         with tempfile.TemporaryDirectory() as root:
@@ -42,10 +42,9 @@ class TestElastixStackIO(unittest.TestCase):
             restored = ElastixStack.read(path)
             self.assertEqual(len(restored), 1)
             self.assertEqual(restored[0]['TransformParameters'], ['7'])
-            self.assertEqual(len(ElastixStack(dirpath=path)), 1)
 
             other_path = os.path.join(root, 'legacy')
-            restored.to_file(other_path)
+            restored.write(other_path)
             self.assertEqual(len(ElastixStack.read(other_path)), 1)
 
     def test_read_many_and_legacy_helper(self):

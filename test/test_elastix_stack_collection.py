@@ -47,14 +47,14 @@ class TestElastixStackCollection(unittest.TestCase):
         pairs = [(a, b) for a in stack for b in stack]
         self.assertEqual(len(pairs), 4)
 
-    def test_append_extend_and_legacy_constructor(self):
-        print('Testing ElastixStack: append, extend and constructor alias')
+    def test_append_extend_and_constructor_validation(self):
+        print('Testing ElastixStack: append, extend and constructor validation')
         from squirrel.library.elastix import ElastixStack
 
-        stack = ElastixStack(stack=[self.make_map(1)])
+        stack = ElastixStack(transforms=[self.make_map(1)])
         with self.assertRaises(TypeError):
             stack.append(ElastixStack())
         stack.extend(ElastixStack(transforms=[self.make_map(2)]))
         self.assertEqual(len(stack), 2)
-        with self.assertRaises(ValueError):
-            ElastixStack(transforms=[], stack=[])
+        with self.assertRaises(TypeError):
+            ElastixStack(transforms=[object()])

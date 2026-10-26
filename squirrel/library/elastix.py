@@ -1197,35 +1197,49 @@ def c_to_elastix(parameters):
 
 class ElastixStack:
 
-    def __init__(
-            self,
-            stack=None,
-            dirpath=None,
-            pattern='*.txt',
-            image_shape=None
-    ):
+    def __init__(self, transforms=None, dirpath=None, pattern='*.txt', image_shape=None, stack=None):
         self._dirpath = None
         self._pattern = None
-        self._stack = None
-        self._it = 0
-        if stack is not None:
-            self.set_from_stack(stack, image_shape=image_shape)
+        self._stack = []
+
+        if transforms is not None and stack is not None:
+            raise ValueError('Specify either transforms or stack, not both.')
+        if dirpath is not None and (transforms is not None or stack is not None):
+            raise ValueError('Specify either transforms or dirpath, not both.')
+
+        if transforms is None:
+            transforms = stack
+        if transforms is not None:
+            self.set_from_stack(transforms, image_shape=image_shape)
         if dirpath is not None:
             self.set_from_dir(dirpath, pattern)
 
     def set_from_stack(self, stack, image_shape=None):
-        # assert type(stack) is list or type(stack) is tuple, 'Only accepting lists or tuples'
         from SimpleITK import ParameterMap
-        if isinstance(stack[0], ParameterMap):
-            self._stack = list(stack)
-            return
         from squirrel.library.affine_matrices import AffineStack
+
         if isinstance(stack, AffineStack):
-            self._stack = [
-                x.to_elastix(as_parameter_map=True, shape=image_shape) for x in stack
-            ]
-            return
-        raise ValueError(f'Invalid transform stack type: {type(stack)}')
+            transforms = [x.to_elastix(as_parameter_map=True, shape=image_shape) for x in stack]
+        elif isinstance(stack, ElastixStack):
+            transforms = list(stack)
+        else:
+            try:
+                transforms = list(stack)
+            except TypeError as exc:
+                raise TypeError('transforms must be a sequence of parameter maps.') from exc
+
+        if not all(isinstance(transform, ParameterMap) for transform in transforms):
+            raise TypeError('All transforms must be SimpleITK ParameterMap objects.')
+        self._stack = [self._copy_transform(transform) for transform in transforms]
+
+    @staticmethod
+    def _copy_transform(transform):
+        from SimpleITK import ParameterMap
+
+        result = ParameterMap()
+        for key in transform.keys():
+            result[key] = list(transform[key])
+        return result
 
     def set_from_dir(self, dirpath, pattern):
         from SimpleITK import ReadParameterFile
@@ -1244,40 +1258,35 @@ class ElastixStack:
             WriteParameterFile(transform, filepath)
 
     def __getitem__(self, item):
-        if self._stack is not None:
-            return self._stack[item]
-        return []
+        if isinstance(item, slice):
+            return self.get_substack(item)
+        return self._stack[item]
 
     def __setitem__(self, key, value):
         self._stack[key] = value
 
     def __len__(self):
-        if self._stack is None:
-            return 0
         return len(self._stack)
 
     def __iter__(self):
-        self._it = 0
-        return self
-
-    def __next__(self):
-        if self._it < len(self):
-            x = self[self._it]
-            self._it += 1
-            return x
-        else:
-            raise StopIteration
+        return iter(self._stack)
 
     def append(self, other):
-        if isinstance(other, ElastixStack):
-            for x in other:
-                self.append(x)
-            return
         from SimpleITK import ParameterMap
-        if isinstance(other, ParameterMap):
-            self.set_from_stack(self[:] + [other])
-            return
-        raise ValueError(f'Invalid type of other: {type(other)}')
+
+        if not isinstance(other, ParameterMap):
+            raise TypeError('append expects a SimpleITK ParameterMap; use extend for stacks.')
+        self._stack.append(self._copy_transform(other))
+
+    def extend(self, other):
+        for transform in list(other):
+            self.append(transform)
+
+    def copy(self):
+        result = ElastixStack(transforms=self._stack)
+        result._dirpath = self._dirpath
+        result._pattern = self._pattern
+        return result
 
     def image_shape(self):
         shapes = []
@@ -1288,17 +1297,17 @@ class ElastixStack:
 
         return shapes[0]
 
-    def get_substack(self, sl:slice):
-        substack = ElastixStack()
-        substack.set_from_stack(self[sl])
-        return substack
-    
+    def get_substack(self, sl: slice):
+        if not isinstance(sl, slice):
+            raise TypeError('selection must be a slice.')
+        return ElastixStack(transforms=self._stack[sl])
+
 
 def load_transform_stack_from_multiple_files(paths, sequence_stack=False):
 
     stack = ElastixStack(dirpath=paths[0])
     for path in paths[1:]:
-        stack.append(ElastixStack(dirpath=path))
+        stack.extend(ElastixStack(dirpath=path))
     return stack
 
 

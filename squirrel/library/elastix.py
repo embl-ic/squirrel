@@ -1386,7 +1386,7 @@ class ElastixMultiStepStack:
             z_range = norm_z_range(z_range, shape[0])
             dtype = h.dtype
         else:
-            z_range = norm_z_range(z_range, len(image_stack_h))
+            z_range = norm_z_range(z_range, image_stack_h.shape[0])
             dtype = image_stack_h.dtype
         result_volume = []
         max_val = np.iinfo(dtype).max

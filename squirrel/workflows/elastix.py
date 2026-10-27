@@ -870,6 +870,15 @@ def apply_multi_step_stack_alignment_workflow(
         else:
             stack = AffineStack.read(transform_path)
 
+            if not stack.sequenced:
+                if assert_sequenced:
+                    raise AssertionError(
+                        f"Transformation stack is not sequenced: {transform_path}"
+                    )
+
+                # Sequence before slicing to retain the global reference frame.
+                stack = stack.to_sequenced()
+
             if z_range is not None:
                 stack = stack[
                     start_transform_id:
@@ -882,14 +891,6 @@ def apply_multi_step_stack_alignment_workflow(
                 print(f"found image_shape = {image_shape}")
             else:
                 image_shape = target_image_shape
-
-            if not stack.sequenced:
-                if assert_sequenced:
-                    raise AssertionError(
-                        f"Transformation stack is not sequenced: {transform_path}"
-                    )
-
-                stack = stack.to_sequenced()
 
             stacks.append(ElastixStack(transforms=stack, image_shape=image_shape))
 

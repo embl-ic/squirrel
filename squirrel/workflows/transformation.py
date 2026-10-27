@@ -500,21 +500,21 @@ def apply_stack_alignment_on_volume_workflow(
     from squirrel.library.transformation import apply_stack_alignment
     from squirrel.library.affine_matrices import AffineMatrix, AffineStack
 
-    transforms = AffineStack(filepath=transform_filepath)
+    transforms = AffineStack.read(transform_filepath)
     if verbose:
-        print(f'is_sequenced = {transforms.is_sequenced}')
-    if not transforms.is_sequenced and not no_adding_of_transforms:
+        print(f'is_sequenced = {transforms.sequenced}')
+    if not transforms.sequenced and not no_adding_of_transforms:
         if verbose:
             print(f'Sequencing stack!')
-        transforms = transforms.get_sequenced_stack()
+        transforms = transforms.to_sequenced()
 
     if stack_shape is None:
         stack_h, stack_shape = load_data_handle(stack, key=key, pattern=pattern)
     else:
         assert not auto_pad, "Don't supply a stack shape if auto padding will be performed!"
         stack_h, _ = load_data_handle(stack, key=key, pattern=pattern)
-    if transforms.exists_meta('stack_shape'):
-        stack_shape = transforms.get_meta('stack_shape')
+    if transforms.has_metadata('stack_shape'):
+        stack_shape = transforms.get_metadata('stack_shape')
     stack_len = stack_shape[0]
     if z_range is not None:
         stack_len = z_range[1] - z_range[0]
@@ -593,9 +593,9 @@ def scale_sequential_affines_workflow(
 ):
 
     from ..library.affine_matrices import AffineStack
-    transforms = AffineStack(filepath=transform_filepath)
-    transforms = transforms.get_scaled(scale)
-    transforms.to_file(out_filepath)
+    transforms = AffineStack.read(transform_filepath)
+    transforms = transforms.scaled_for_stack_resize(scale)
+    transforms.write(out_filepath)
 
 
 def sequence_affine_stack_workflow(
@@ -610,9 +610,9 @@ def sequence_affine_stack_workflow(
 
     from squirrel.library.affine_matrices import AffineStack
 
-    transforms = AffineStack(filepath=transform_filepath)
-    transforms = transforms.get_sequenced_stack()
-    transforms.to_file(out_filepath)
+    transforms = AffineStack.read(transform_filepath)
+    transforms = transforms.to_sequenced()
+    transforms.write(out_filepath)
 
     # import json
     # with open(transform_filepath, mode='r') as f:
@@ -639,9 +639,9 @@ def smooth_affine_sequence_workflow(
 
     from ..library.affine_matrices import AffineStack
 
-    transforms = AffineStack(filepath=transform_filepath)
-    transforms = transforms.get_smoothed_stack(sigma, mode=mode)
-    transforms.to_file(out_filepath)
+    transforms = AffineStack.read(transform_filepath)
+    transforms = transforms.smooth_gaussian(sigma, mode=mode)
+    transforms.write(out_filepath)
 
 
 def inverse_of_sequence_workflow(
@@ -689,42 +689,16 @@ def add_translational_drift_workflow(
 
     from ..library.affine_matrices import AffineStack
 
-    transforms = AffineStack(filepath=transform_filepath)
+    transforms = AffineStack.read(transform_filepath)
 
-    if transforms.is_sequenced:
-        transforms.add_to_translations([np.array(drift) * x for x in range(len(transforms))])
+    if transforms.sequenced:
+        transforms = transforms.add_to_translations([np.array(drift) * x for x in range(len(transforms))])
     else:
-        transforms.add_to_translations(drift)
+        transforms = transforms.add_to_translations(drift)
 
-    transforms.to_file(out_filepath)
+    transforms.write(out_filepath)
 
-    # from ..library.elastix import save_transforms
-    # from ..library.transformation import load_transform_matrices, save_transformation_matrices
-    # transforms, sequenced = load_transform_matrices(transform_filepath, validate=True, ndim=2)
-    # transforms = np.array(transforms)
-    #
-    # if sequenced is not None:
-    #     is_serialized = sequenced
-    #
-    # if is_serialized:
-    #     drift = [np.array(drift) * x for x in range(len(transforms))]
-    # else:
-    #     drift = [drift] * len(transforms)
-    #
-    # for idx, transform in enumerate(transforms):
-    #     transforms[idx][:2, 2] += drift[idx]
-    #
-    # # Prepare for saving
-    # transforms = [
-    #     save_transforms(x, None, param_order='M', save_order='C', ndim=2)[:6].tolist()
-    #     for x in transforms
-    # ]
-    #
-    # save_transformation_matrices(out_filepath, transforms, sequenced=sequenced)
-    #
-    # # import json
-    # # with open(out_filepath, mode='w') as f:
-    # #     json.dump(transforms, f, indent=2)
+
 
 
 def modify_step_in_sequence_workflow(transform_filepath, out_filepath, idx, affine, replace=False, return_result=False, verbose=False):
@@ -735,35 +709,38 @@ def modify_step_in_sequence_workflow(transform_filepath, out_filepath, idx, affi
         print(f'affine = {affine}')
         print(f'replace = {replace}')
 
-    # from ..library.linalg import modify_step_in_sequence
-    # from ..library.transformation import load_transform_matrices, save_transformation_matrices
-    # from ..library.elastix import save_transforms
-    #
-    # transforms, sequenced = load_transform_matrices(transform_filepath, validate=True, ndim=2)
-    # transforms = modify_step_in_sequence(transforms, idx, affine, replace=replace)
-    # save_transformation_matrices(
-    #     out_filepath,
-    #     save_transforms(transforms, None, param_order='M', save_order='C', ndim=2),
-    #     sequenced=sequenced
-    # )
+    from squirrel.library.affine_matrices import AffineMatrix, AffineStack
 
-    from squirrel.library.affine_matrices import AffineStack, AffineMatrix
-    if not isinstance(transform_filepath, AffineStack):
-        transforms = AffineStack(filepath=transform_filepath)
+    if isinstance(transform_filepath, AffineStack):
+        transforms = transform_filepath.copy()
     else:
-        transforms = transform_filepath
+        transforms = AffineStack.read(transform_filepath)
+
+    if not 0 <= idx < len(transforms):
+        raise IndexError(f'Transform index {idx} is out of range.')
+    if replace and transforms.sequenced:
+        raise ValueError('Replacing a step requires a relative affine stack.')
+
+    modification = AffineMatrix(affine, pivot=transforms.pivot)
+    matrices = [matrix.copy() for matrix in transforms]
+
     if replace:
-        assert not transforms.is_sequenced
-        transforms[idx] = AffineMatrix(parameters=affine)
-    if transforms.is_sequenced:
-        for tidx, transform in enumerate(transforms[idx:]):
-            transforms[idx + tidx] = transform * AffineMatrix(parameters=affine)
+        matrices[idx] = modification
+    elif transforms.sequenced:
+        for tidx in range(idx, len(matrices)):
+            matrices[tidx] = matrices[tidx] @ modification
     else:
-        transforms[idx] = transforms[idx] * AffineMatrix(parameters=affine)
+        matrices[idx] = matrices[idx] @ modification
+
+    result = AffineStack(
+        matrices=matrices,
+        sequenced=transforms.sequenced,
+        metadata=transforms.metadata,
+    )
 
     if return_result:
-        return transforms
-    transforms.to_file(out_filepath)
+        return result
+    result.write(out_filepath)
 
 
 def create_affine_sequence_workflow(
@@ -783,12 +760,12 @@ def create_affine_sequence_workflow(
     from squirrel.library.affine_matrices import AffineStack, AffineMatrix
 
     if from_transform_file is None:
-        matrix = AffineMatrix(parameters=np.eye(3)[:2].flatten())
+        matrix = AffineMatrix.identity(ndim=2)
     else:
-        matrix = AffineMatrix(filepath=from_transform_file)
+        matrix = AffineMatrix.read(from_transform_file)
 
-    transforms = AffineStack(stack=[matrix] * length, is_sequenced=sequenced)
-    transforms.to_file(out_filepath)
+    transforms = AffineStack(matrices=[matrix.copy() for _ in range(length)], sequenced=sequenced)
+    transforms.write(out_filepath)
 
 
 def apply_auto_pad_workflow(
@@ -827,10 +804,10 @@ def crop_transform_sequence_workflow(transform_filepath, out_filepath, z_range, 
         print(f'z_range = {z_range}')
 
     from squirrel.library.affine_matrices import AffineStack
-    stack = AffineStack(filepath=transform_filepath)
-    out_stack = stack.new_stack_with_same_meta(stack[z_range[0]: z_range[1]])
+    stack = AffineStack.read(transform_filepath)
+    out_stack = stack[z_range[0]:z_range[1]]
 
-    out_stack.to_file(out_filepath)
+    out_stack.write(out_filepath)
 
 
 def get_affine_transforms_substack_workflow(transform_filepath, out_filepath, z_range, verbose=False):
@@ -842,24 +819,14 @@ def get_affine_transforms_substack_workflow(transform_filepath, out_filepath, z_
 
     from squirrel.library.affine_matrices import AffineStack
 
-    stack = AffineStack(filepath=transform_filepath)
+    stack = AffineStack.read(transform_filepath)
 
     import numpy as np
-    substack = stack.get_substack(np.s_[z_range[0]: z_range[1]])
+    substack = stack[z_range[0]:z_range[1]]
 
-    substack.to_file(out_filepath)
+    substack.write(out_filepath)
 
 
 if __name__ == '__main__':
-
-    # from squirrel.library.affine_matrices import AffineStack, AffineMatrix
-    #
-    # affines = AffineStack(stack = [[1, 0, 0, 0, 1, 0], [1, 0, 0, 0, 1, 0], [1, 0, 0, 0, 1, 0]], is_sequenced=True)
-    #
-    # print(affines['C', :])
-    #
-    # modified_affines = modify_step_in_sequence_workflow(affines, None, 1, [1, 0, 10, 0, 1, 5], return_result=True)
-    #
-    # print(modified_affines['C', :])
 
     create_affine_sequence_workflow('test.json', 10, None, False)

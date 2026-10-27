@@ -290,3 +290,120 @@ class TestApplyAffineTransform(unittest.TestCase):
             result.shape,
             (5, 4),
         )
+
+
+class TestAffineWorkflowCompatibility(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_sequence_and_crop_preserve_metadata(self):
+        print('Testing affine workflow sequencing and cropping')
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import (
+            sequence_affine_stack_workflow,
+            crop_transform_sequence_workflow,
+        )
+
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.json'
+            sequenced = Path(folder) / 'sequenced.json'
+            cropped = Path(folder) / 'cropped.json'
+            stack = AffineStack.from_array(
+                [[1, 0, 1, 0, 1, 0]] * 4,
+                sequenced=False,
+                metadata={'stack_shape': [4, 20, 30]},
+            )
+            stack.write(source)
+            sequence_affine_stack_workflow(source, sequenced)
+            result = AffineStack.read(sequenced)
+            self.assertTrue(result.sequenced)
+            np.testing.assert_allclose([m.translation[0] for m in result], [1, 2, 3, 4])
+
+            crop_transform_sequence_workflow(sequenced, cropped, [1, 3])
+            result = AffineStack.read(cropped)
+            self.assertEqual(len(result), 2)
+            self.assertTrue(result.sequenced)
+            self.assertEqual(result.get_metadata('stack_shape'), [2, 20, 30])
+            np.testing.assert_allclose([m.translation[0] for m in result], [2, 3])
+
+    def test_drift_and_smoothing(self):
+        print('Testing affine workflow drift and smoothing')
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import (
+            add_translational_drift_workflow,
+            smooth_affine_sequence_workflow,
+        )
+
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.json'
+            drifted = Path(folder) / 'drifted.json'
+            smoothed = Path(folder) / 'smoothed.json'
+            stack = AffineStack.from_array([[1, 0, 0, 0, 1, 0]] * 3, sequenced=True)
+            stack.write(source)
+            add_translational_drift_workflow(source, drifted, [2, 3])
+            result = AffineStack.read(drifted)
+            np.testing.assert_allclose([m.translation for m in result], [[0, 0], [2, 3], [4, 6]])
+            smooth_affine_sequence_workflow(drifted, smoothed, sigma=0)
+            np.testing.assert_allclose(AffineStack.read(smoothed).as_array(), result.as_array())
+
+
+class TestModifyStepInSequenceWorkflow(unittest.TestCase):
+
+    def setUp(self):
+        warnings.simplefilter('ignore', category=Warning)
+
+    def test_modify_step_in_sequence_workflow_relative_and_replace(self):
+        print('Testing modify_step_in_sequence_workflow: relative composition and replacement')
+
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import modify_step_in_sequence_workflow
+
+        stack = AffineStack.from_array(
+            [[1, 0, 1, 0, 1, 2], [1, 0, 3, 0, 1, 4]],
+            pivot=[5, 7], metadata={'source': 'test'},
+        )
+        affine = [1, 0, 10, 0, 1, 20]
+        result = modify_step_in_sequence_workflow(stack, None, 1, affine, return_result=True)
+        np.testing.assert_allclose(result[0].translation, [1, 2])
+        np.testing.assert_allclose(result[1].translation, [13, 24])
+        np.testing.assert_allclose(stack[1].translation, [3, 4])
+        self.assertEqual(result.metadata, stack.metadata)
+        np.testing.assert_allclose(result.pivot, [5, 7])
+        self.assertFalse(result.sequenced)
+
+        replaced = modify_step_in_sequence_workflow(
+            stack, None, 1, affine, replace=True, return_result=True,
+        )
+        np.testing.assert_allclose(replaced[1].translation, [10, 20])
+
+    def test_modify_step_in_sequence_workflow_sequenced_suffix(self):
+        print('Testing modify_step_in_sequence_workflow: sequenced suffix and validation')
+
+        from squirrel.library.affine_matrices import AffineStack
+        from squirrel.workflows.transformation import modify_step_in_sequence_workflow
+
+        stack = AffineStack.from_array(
+            [[1, 0, 1, 0, 1, 2], [1, 0, 3, 0, 1, 4], [1, 0, 5, 0, 1, 6]],
+            sequenced=True,
+        )
+        result = modify_step_in_sequence_workflow(
+            stack, None, 1, [1, 0, 10, 0, 1, 20], return_result=True,
+        )
+        np.testing.assert_allclose(
+            [matrix.translation for matrix in result],
+            [[1, 2], [13, 24], [15, 26]],
+        )
+        self.assertTrue(result.sequenced)
+        with self.assertRaises(ValueError):
+            modify_step_in_sequence_workflow(
+                stack, None, 1, [1, 0, 10, 0, 1, 20], replace=True,
+            )
+        with self.assertRaises(IndexError):
+            modify_step_in_sequence_workflow(
+                stack, None, 3, [1, 0, 10, 0, 1, 20], return_result=True,
+            )

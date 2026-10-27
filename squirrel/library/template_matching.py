@@ -11,7 +11,7 @@ def match_template_on_image(image, template):
     y, x = np.unravel_index(np.argmax(result), result.shape)
 
     return AffineMatrix(
-        parameters=setup_translation_matrix([y, x], ndim=2).flatten(),
+        matrix=setup_translation_matrix([y, x], ndim=2),
         pivot=[0., 0.]
     )
 

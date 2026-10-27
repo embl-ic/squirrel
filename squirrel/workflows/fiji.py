@@ -15,11 +15,11 @@ def sift_log_to_affine_stack_workflow(
         transforms = sift_log_to_affine_stack(f.readlines(), pivot=pivot)
 
     from squirrel.library.affine_matrices import AffineStack
-    out_transforms = transforms.new_stack_with_same_meta(AffineStack([[1., 0., 0., 0., 1., 0.]], pivot=pivot if pivot is not None else [0., 0.]))
-    out_transforms.append(transforms)
+    out_transforms = AffineStack.identity(1, ndim=2, pivot=pivot, sequenced=False)
+    out_transforms.extend(transforms)
 
     if out_filepath is not None:
-        out_transforms.to_file(out_filepath)
+        out_transforms.write(out_filepath)
 
     return out_transforms
 

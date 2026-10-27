@@ -254,7 +254,7 @@ def apply_stack_alignment(
             if verbose:
                 print(f'stack_idx = {stack_idx}')
                 print(f'len(transform_stack) = {len(transform_stack)}')
-                print(f'transform_stack[stack_idx] = {transform_stack[stack_idx].get_matrix()}')
+                print(f'transform_stack[stack_idx] = {transform_stack[stack_idx].as_array()}')
 
             result_volume.append(apply_stack_alignment_slice(
                 stack_h,

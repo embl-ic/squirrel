@@ -396,7 +396,7 @@ class AffineStack:
         translations = np.stack([matrix.translation for matrix in self])
         return self.with_translations(translations + offsets)
 
-    def get_substack(self, selection):
+    def _slice(self, selection):
         """
         Return a substack and slice matching per-transform metadata.
         """
@@ -948,7 +948,7 @@ class AffineStack:
 
     def __getitem__(self, item):
         if isinstance(item, slice):
-            return self.get_substack(item)
+            return self._slice(item)
         return self._matrices[item]
 
     def __matmul__(self, other):

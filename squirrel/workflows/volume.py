@@ -551,6 +551,7 @@ def filter_2d_workflow(
         filters=None,
         batch_size=None,
         n_workers=1,
+        backend='threading',
         verbose=False,
         progress=True,
         save_intermediates=False,
@@ -565,6 +566,13 @@ def filter_2d_workflow(
     if not isinstance(progress, (bool, np.bool_)):
         raise TypeError(f'progress must be a boolean, got {progress!r}')
 
+    if not isinstance(backend, str):
+        raise TypeError(f'backend must be a string, got {backend!r}')
+    if backend not in ('serial', 'threading', 'multiprocessing'):
+        raise ValueError(f'Unknown filtering backend {backend!r}')
+    if backend == 'serial' and n_workers != 1:
+        raise ValueError('backend="serial" requires n_workers=1')
+
     if verbose:
         print(f'input_path = {input_path}')
         print(f'out_path = {out_path}')
@@ -573,6 +581,7 @@ def filter_2d_workflow(
         print(f'filters = {filters}')
         print(f'batch_size = {batch_size}')
         print(f'n_workers = {n_workers}')
+        print(f'backend = {backend}')
         print(f'progress = {progress}')
         print(f'save_intermediates = {save_intermediates}')
         print(f'resume = {resume}')
@@ -661,14 +670,14 @@ def filter_2d_workflow(
 
     def filter_batch(data, callback=None, show_progress=False):
         result = ImageFilter(data).get_filtered_stack(
-            filters, n_workers=n_workers, progress=show_progress,
+            filters, n_workers=n_workers, backend=backend, progress=show_progress,
             progress_callback=callback, return_intermediates=save_intermediates)
         if save_intermediates:
             return result
         return result, None
 
     if verbose:
-        print(f'Filtering stack with shape {stack_shape}, workers={n_workers}, batch_size={batch_size}')
+        print(f'Filtering stack with shape {stack_shape}, workers={n_workers}, backend={backend}, batch_size={batch_size}')
 
     if batch_size is None:
 

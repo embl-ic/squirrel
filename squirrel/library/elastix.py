@@ -82,7 +82,7 @@ def apply_transforms_on_image(
         txif.LogToConsoleOn()
     for transform in transforms[::-1]:
         if type(transform) == AffineMatrix:
-            transform = transform.to_elastix_affine(shape=image.shape, return_parameter_map=True)
+            transform = transform.to_elastix(shape=image.shape, as_parameter_map=True)
         txif.AddTransformParameterMap(transform)
     txif.SetMovingImage(sitk.GetImageFromArray(image))
     txif.Execute()
@@ -293,7 +293,7 @@ def initialize_offsets_with_xcorr(
     offsets_unbinned = np.array(offsets) * binning
 
     from squirrel.library.affine_matrices import AffineMatrix
-    return AffineMatrix(translation=-offsets_unbinned)
+    return AffineMatrix.from_translation(-offsets_unbinned)
 
 
 def initialize_offsets(
@@ -441,7 +441,7 @@ def initialize_offsets(
 
     for idx, offset in enumerate(offsets):
 
-        this_offset = AffineMatrix(translation=offset)
+        this_offset = AffineMatrix.from_translation(offset)
         this_moving_img = apply_transforms_on_image(moving_img, [this_offset])
         this_moving_mask = apply_transforms_on_image(moving_mask, [this_offset]).astype('uint8')
         this_mask = this_moving_mask * fixed_mask
@@ -470,7 +470,7 @@ def initialize_offsets(
             if debug_dir is not None:
                 best_registered_img = registered_img.copy()
             best_offset = offset
-            best_transform_params = this_offset * AffineMatrix(elastix_parameters=this_transform_params)
+            best_transform_params = this_offset @ AffineMatrix.from_elastix(this_transform_params)
 
         result_matrix[tuple(((offset - min_offsets) / spacing).astype(int))] = mi_fixed_vs_registered
         if mi_fixed_vs_registered < mi_thresh:
@@ -491,14 +491,14 @@ def initialize_offsets(
         raise RuntimeError('Initialization failed!')
 
     best_offset_unbinned = np.array(best_offset) * binning
-    best_transform_params_unbinned = best_transform_params.get_scaled(binning)
+    best_transform_params_unbinned = best_transform_params.scaled_for_image_resize(binning)
 
     if verbose:
         print(f'best_score = {best_score}')
         print(f'best_offset = {best_offset}')
         print(f'best_offset_unbinned = {best_offset_unbinned}')
-        print(f'best_transform_params = {best_transform_params.get_matrix()}')
-        print(f'best_transform_params_unbinned = {best_transform_params_unbinned.get_matrix()}')
+        print(f'best_transform_params = {best_transform_params.as_array()}')
+        print(f'best_transform_params_unbinned = {best_transform_params_unbinned.as_array()}')
 
     if debug_dir is not None:
         if not os.path.exists(debug_dir):
@@ -522,7 +522,7 @@ def initialize_offsets(
             plt.savefig(os.path.join(debug_dir, 'mi_score_matrix.png'))
         plt.close()
 
-    print(f'Found initial offset: {best_transform_params_unbinned.get_translation()} -- MI score: {best_score}')
+    print(f'Found initial offset: {best_transform_params_unbinned.translation} -- MI score: {best_score}')
 
     return best_transform_params_unbinned
 
@@ -916,7 +916,7 @@ def register_with_elastix(
         result_matrix = _finalize_result_transform_parameters(elastix_transform_param_map, bounds_offset)
 
         if result_to_disk:
-            result_matrix.to_file(result_to_disk)
+            result_matrix.write(result_to_disk)
             return result_to_disk
         return result_matrix, result_image
 
@@ -954,7 +954,7 @@ def slice_wise_stack_to_stack_alignment(
 
     if transform in ['translation', 'affine']:
         from squirrel.library.affine_matrices import AffineStack
-        result_transforms = AffineStack(sequenced=True, pivot=[0., 0.])
+        result_transforms = AffineStack(sequenced=True)
     elif transform in ['bspline', 'BSplineTransform']:
         result_transforms = ElastixStack()
     else:
@@ -990,7 +990,7 @@ def slice_wise_stack_to_stack_alignment(
                 verbose=verbose
             )
             if transform not in ['bspline', 'BSplineTransform']:
-                result_matrix.shift_pivot_to_origin()
+                result_matrix = result_matrix.shifted_pivot_to_origin()
 
             if result_image is not None:
                 result_stack.append(result_image)
@@ -1063,7 +1063,7 @@ def slice_wise_stack_to_stack_alignment(
                 os.remove(result_filepath)
         else:
             for result_matrix, result_image in results:
-                result_matrix.shift_pivot_to_origin()
+                result_matrix = result_matrix.shifted_pivot_to_origin()
                 if result_image is not None:
                     result_stack.append(result_image)
                 result_transforms.append(result_matrix)
@@ -1197,109 +1197,124 @@ def c_to_elastix(parameters):
 
 class ElastixStack:
 
-    def __init__(
-            self,
-            stack=None,
-            dirpath=None,
-            pattern='*.txt',
-            image_shape=None
-    ):
-        self._dirpath = None
-        self._pattern = None
-        self._stack = None
-        self._it = 0
-        if stack is not None:
-            self.set_from_stack(stack, image_shape=image_shape)
-        if dirpath is not None:
-            self.set_from_dir(dirpath, pattern)
-
-    def set_from_stack(self, stack, image_shape=None):
-        # assert type(stack) is list or type(stack) is tuple, 'Only accepting lists or tuples'
+    def __init__(self, transforms=None, image_shape=None):
         from SimpleITK import ParameterMap
-        if isinstance(stack[0], ParameterMap):
-            self._stack = list(stack)
-            return
         from squirrel.library.affine_matrices import AffineStack
-        if isinstance(stack, AffineStack):
-            self._stack = [
-                x.to_elastix(as_parameter_map=True, shape=image_shape) for x in stack
-            ]
-            return
-        raise ValueError(f'Invalid transform stack type: {type(stack)}')
 
-    def set_from_dir(self, dirpath, pattern):
+        self._transforms = []
+        if transforms is None:
+            return
+
+        if isinstance(transforms, AffineStack):
+            transforms = [matrix.to_elastix(as_parameter_map=True, shape=image_shape)
+                          for matrix in transforms]
+        else:
+            try:
+                transforms = list(transforms)
+            except TypeError as exc:
+                raise TypeError('transforms must be a sequence of parameter maps.') from exc
+
+        if not all(isinstance(transform, ParameterMap) for transform in transforms):
+            raise TypeError('All transforms must be SimpleITK ParameterMap objects.')
+        self._transforms = [self._copy_transform(transform) for transform in transforms]
+
+    @staticmethod
+    def _copy_transform(transform):
+        from SimpleITK import ParameterMap
+
+        result = ParameterMap()
+        for key in transform.keys():
+            result[key] = list(transform[key])
+        return result
+
+    @classmethod
+    def read(cls, dirpath, pattern='*.txt'):
+        """Read an Elastix transformation stack from a directory."""
         from SimpleITK import ReadParameterFile
         import glob
-        filepaths = sorted(glob.glob(os.path.join(dirpath, pattern)))
-        self._stack = [ReadParameterFile(filepath) for filepath in filepaths]
-        self._dirpath = dirpath
-        self._pattern = pattern
 
-    def to_file(self, dirpath):
+        filepaths = sorted(glob.glob(os.path.join(dirpath, pattern)))
+        return cls(transforms=[ReadParameterFile(filepath) for filepath in filepaths])
+
+    @classmethod
+    def read_many(cls, dirpaths, pattern='*.txt'):
+        """Read and concatenate transformation stacks from directories."""
+        result = cls()
+        for dirpath in dirpaths:
+            result.extend(cls.read(dirpath, pattern=pattern))
+        return result
+
+    def write(self, dirpath):
+        """Write transformation parameter files to a directory."""
         from SimpleITK import WriteParameterFile
         if not os.path.exists(dirpath):
             os.mkdir(dirpath)
-        for idx, transform in enumerate(self._stack):
+        for idx, transform in enumerate(self._transforms):
             filepath = os.path.join(dirpath, 'transform_{:05d}.txt'.format(idx))
             WriteParameterFile(transform, filepath)
 
     def __getitem__(self, item):
-        if self._stack is not None:
-            return self._stack[item]
-        return []
-
-    def __setitem__(self, key, value):
-        self._stack[key] = value
+        if isinstance(item, slice):
+            return ElastixStack(transforms=self._transforms[item])
+        return self._transforms[item]
 
     def __len__(self):
-        if self._stack is None:
-            return 0
-        return len(self._stack)
+        return len(self._transforms)
 
     def __iter__(self):
-        self._it = 0
-        return self
+        return iter(self._transforms)
 
-    def __next__(self):
-        if self._it < len(self):
-            x = self[self._it]
-            self._it += 1
-            return x
-        else:
-            raise StopIteration
-
-    def append(self, other):
-        if isinstance(other, ElastixStack):
-            for x in other:
-                self.append(x)
-            return
+    def append(self, transform):
         from SimpleITK import ParameterMap
-        if isinstance(other, ParameterMap):
-            self.set_from_stack(self[:] + [other])
-            return
-        raise ValueError(f'Invalid type of other: {type(other)}')
 
+        if not isinstance(transform, ParameterMap):
+            raise TypeError('append expects a SimpleITK ParameterMap; use extend for stacks.')
+        self._transforms.append(self._copy_transform(transform))
+
+    def extend(self, transforms):
+        from SimpleITK import ParameterMap
+
+        try:
+            transforms = list(transforms)
+        except TypeError as exc:
+            raise TypeError('extend expects an iterable of SimpleITK ParameterMap objects.') from exc
+
+        if not all(isinstance(transform, ParameterMap) for transform in transforms):
+            raise TypeError('All transforms must be SimpleITK ParameterMap objects.')
+
+        self._transforms.extend(self._copy_transform(transform) for transform in transforms)
+
+    def copy(self):
+        return ElastixStack(transforms=self._transforms)
+
+    @property
     def image_shape(self):
+        """Return the common image shape in NumPy axis order, or None if empty."""
+        if not self._transforms:
+            return None
+
         shapes = []
-        for transform in self:
-            shapes.append(np.array([int(float(x)) for x in transform['Size']])[::-1])
-        shapes = np.array(shapes)
-        assert np.all(shapes == shapes[0], axis=0).all(), 'Not all shapes of the transforms are equal - but they should be!'
+        for idx, transform in enumerate(self._transforms):
+            if 'Size' not in transform:
+                raise ValueError(f'Transform {idx} is missing the Size parameter.')
+            try:
+                values = [float(value) for value in transform['Size']]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f'Transform {idx} has an invalid Size parameter.') from exc
+            if not values or any(
+                    not np.isfinite(value) or value <= 0 or not value.is_integer()
+                    for value in values):
+                raise ValueError(f'Transform {idx} has an invalid Size parameter.')
+            shapes.append(tuple(int(value) for value in values[::-1]))
 
-        return shapes[0]
+        if any(shape != shapes[0] for shape in shapes[1:]):
+            raise ValueError('Not all transforms have the same image shape.')
+        return np.array(shapes[0], dtype=int)
 
-    def get_substack(self, sl:slice):
-        substack = ElastixStack()
-        substack.set_from_stack(self[sl])
-        return substack
-    
+    def __repr__(self):
+        return f'ElastixStack(n_transforms={len(self)})'
 
-def load_transform_stack_from_multiple_files(paths, sequence_stack=False):
 
-    stack = ElastixStack(dirpath=paths[0])
-    for path in paths[1:]:
-        stack.append(ElastixStack(dirpath=path))
-    return stack
 
 
 class ElastixMultiStepStack:
@@ -1316,7 +1331,7 @@ class ElastixMultiStepStack:
             [self.add_stack(stack, image_shape=image_shape) for stack in stacks]
 
     def add_stack(self, stack, image_shape=None):
-        stack = ElastixStack(stack=stack, image_shape=image_shape)
+        stack = ElastixStack(transforms=stack, image_shape=image_shape)
         if self._stacks is not None:
             assert len(stack) == len(self), 'The length of the added stack does not match'
             self._stacks = [self[idx] + [s] for idx, s in enumerate(stack)]
@@ -1371,7 +1386,7 @@ class ElastixMultiStepStack:
             z_range = norm_z_range(z_range, shape[0])
             dtype = h.dtype
         else:
-            z_range = norm_z_range(z_range, len(image_stack_h))
+            z_range = norm_z_range(z_range, image_stack_h.shape[0])
             dtype = image_stack_h.dtype
         result_volume = []
         max_val = np.iinfo(dtype).max
@@ -1478,7 +1493,7 @@ def search_best_registration(fixed, moving):
         params_to_origin=True,
         gaussian_sigma=1.0
     )
-    shift_elx0 = -shift_matrix.get_translation() * 8
+    shift_elx0 = -shift_matrix.translation * 8
     # Run elastix (bin4)
     shift_matrix, _ = register_with_elastix(
         average_bin_image(fixed, 4),
@@ -1490,7 +1505,7 @@ def search_best_registration(fixed, moving):
         params_to_origin=True,
         gaussian_sigma=1.0
     )
-    shift_elx1 = -shift_matrix.get_translation() * 4
+    shift_elx1 = -shift_matrix.translation * 4
     shift_matrix, _ = register_with_elastix(
         average_bin_image(fixed, 2),
         average_bin_image(moving, 2),
@@ -1501,7 +1516,7 @@ def search_best_registration(fixed, moving):
         params_to_origin=True,
         gaussian_sigma=1.0
     )
-    shift_elx2 = -shift_matrix.get_translation() * 2
+    shift_elx2 = -shift_matrix.translation * 2
 
     shifts = [
         [0., 0.],
@@ -1553,7 +1568,7 @@ def search_best_registration(fixed, moving):
         parameter_map=pmap,
         verbose=False
     )
-    final_shift = shifts[idx] - shift_matrix.get_translation()
+    final_shift = shifts[idx] - shift_matrix.translation
 
     final_error = 1 - normalized_cross_correlation(fixedg, movingg, final_shift)
     final_mi = compute_mattes_mi(fixedg, ndi_shift(movingg, shift=final_shift))

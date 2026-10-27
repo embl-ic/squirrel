@@ -1229,8 +1229,8 @@ class TestAffineStack(unittest.TestCase):
                 [1., 2., 3.]
             )
 
-    def test_get_substack(self):
-        print('Testing AffineStack: get_substack ...')
+    def test_slice(self):
+        print('Testing AffineStack: slicing ...')
         stack = AffineStack(
             matrices=[
                 AffineMatrix.from_translation([0., 0.]),
@@ -1251,7 +1251,7 @@ class TestAffineStack(unittest.TestCase):
             },
         )
 
-        result = stack.get_substack(slice(1, 3))
+        result = stack[1:3]
 
         self.assertEqual(len(result), 2)
         self.assertTrue(result.sequenced)
@@ -1281,8 +1281,8 @@ class TestAffineStack(unittest.TestCase):
             "test",
         )
 
-    def test_get_substack_numpy_metadata(self):
-        print('Testing AffineStack: get_substack numpy metadata ...')
+    def test_slice_numpy_metadata(self):
+        print('Testing AffineStack: slicing numpy metadata ...')
         stack = AffineStack.identity(
             length=4,
             ndim=2,
@@ -1298,7 +1298,7 @@ class TestAffineStack(unittest.TestCase):
             },
         )
 
-        result = stack.get_substack(slice(1, 3))
+        result = stack[1:3]
 
         np.testing.assert_array_equal(
             result.get_metadata("bounds"),
@@ -1310,8 +1310,8 @@ class TestAffineStack(unittest.TestCase):
             ),
         )
 
-    def test_get_substack_rejects_non_slice(self):
-        print('Testing AffineStack: get_substack rejects non-slice ...')
+    def test_slice_rejects_non_slice(self):
+        print('Testing AffineStack: slicing rejects non-slice ...')
         stack = AffineStack.identity(
             length=3,
             ndim=2,
@@ -1319,9 +1319,9 @@ class TestAffineStack(unittest.TestCase):
 
         with self.assertRaisesRegex(
             TypeError,
-            "selection must be a slice",
+            "list indices must be integers or slices",
         ):
-            stack.get_substack([0, 1])
+            stack[[0, 1]]
 
     def test_getitem_slice_uses_substack_metadata(self):
         print('Testing AffineStack: getitem slice uses substack metadata ...')
